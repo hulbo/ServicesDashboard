@@ -13,9 +13,13 @@
   import PresetPanel from './lib/components/PresetPanel.svelte'
   import BranchPanel from './lib/components/BranchPanel.svelte'
   import { headLabel } from './lib/git'
+  import { applyFonts } from './lib/fonts'
   import Toasts from './lib/components/Toasts.svelte'
 
   let initError = $state<string | null>(null)
+
+  // 설정의 글꼴(미리보기 포함)을 문서 전체에 적용
+  $effect(() => applyFonts(app.fonts))
 
   onMount(() => {
     app.init().catch((e) => (initError = String(e)))

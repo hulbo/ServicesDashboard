@@ -9,6 +9,7 @@ import type {
   LogBatch,
   LogLine,
   AppSettings,
+  FontFamily,
   PortOwner,
   RuntimeInfo,
   ScanResult,
@@ -47,6 +48,8 @@ export interface Backend {
   processKill(pid: number): Promise<void>
   settingsGet(): Promise<AppSettings>
   settingsSave(settings: AppSettings): Promise<AppSettings>
+  /** 설치된 글꼴 목록 */
+  systemFonts(): Promise<FontFamily[]>
   logsExport(id: string, path: string): Promise<number>
   logsDir(id: string): Promise<string>
   pickSaveFile(defaultName: string): Promise<string | null>
@@ -110,6 +113,7 @@ async function createTauriBackend(): Promise<Backend> {
     processKill: (pid) => call('process_kill', { pid }),
     settingsGet: () => call('settings_get'),
     settingsSave: (settings) => call('settings_save', { settings }),
+    systemFonts: () => call('system_fonts'),
     logsExport: (id, path) => call('logs_export', { id, path }),
     logsDir: (id) => call('logs_dir', { id }),
     async pickSaveFile(defaultName) {

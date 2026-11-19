@@ -1,10 +1,11 @@
 // 앱 전역 상태 (Svelte 5 runes)
 
 import { createBackend, errorMessage, type Backend } from './api'
+import { consoleRow, fontsOf } from './fonts'
 import { detectHeadChanges, headLabel } from './git'
 import { applyImport, type ImportItem, type PresetItem } from './importing'
 import { LogStore } from './logstore'
-import type { AppInfo, AppSettings, GitRepo, Group, LogBatch, PortOwner, Preset, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
+import type { AppInfo, AppSettings, FontFamily, FontSettings, GitRepo, Group, LogBatch, PortOwner, Preset, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
 import { isActive } from './types'
 
 export type Selection = { kind: 'service' | 'group' | 'preset'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' | 'settings' | 'branches' }
@@ -75,6 +76,10 @@ class AppState {
   /** 가져오기 화면에서 마지막으로 스캔한 폴더 */
   importRoot = $state('')
   settings = $state<AppSettings | null>(null)
+  /** 설정 화면에서 고르는 중인 글꼴 (저장 전 미리보기). 화면을 떠나면 null */
+  fontPreview = $state<FontSettings | null>(null)
+  /** 설치된 글꼴 목록 (처음 설정 화면을 열 때 읽는다) */
+  systemFonts = $state<FontFamily[] | null>(null)
   conflict = $state<PortConflict | null>(null)
   /** 서비스가 쓰는 git 저장소와 현재 브랜치 */
   repos = $state<GitRepo[]>([])
@@ -135,6 +140,26 @@ class AppState {
       this.settings = await this.backend.settingsGet()
     } catch (e) {
       this.toast('error', `설정을 읽지 못했습니다: ${errorMessage(e)}`)
+    }
+  }
+
+  /** 지금 화면에 쓰는 글꼴: 미리보기 중이면 그것, 아니면 저장된 설정 */
+  get fonts(): FontSettings {
+    return this.fontPreview ?? fontsOf(this.settings)
+  }
+
+  /** 콘솔 한 줄 높이(px) */
+  get consoleRow(): number {
+    return consoleRow(this.fonts.consoleSize)
+  }
+
+  async loadSystemFonts() {
+    if (this.systemFonts) return
+    try {
+      this.systemFonts = await this.backend.systemFonts()
+    } catch (e) {
+      this.systemFonts = []
+      this.toast('error', errorMessage(e))
     }
   }
 

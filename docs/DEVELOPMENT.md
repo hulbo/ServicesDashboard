@@ -55,6 +55,7 @@ src/                       화면 (Svelte 5 + TypeScript)
   lib/importing.ts         가져오기 후보 → 워크스페이스 반영 (변수 치환, 다시 가져오기 병합)
   lib/git.ts               브랜치 표시·밖에서 바꾼 브랜치 감지
   lib/reorder.ts           목록 순서 바꾸기·이름순 정렬
+  lib/fonts.ts             글꼴 설정 적용(CSS 변수)·콘솔 줄 높이
   lib/components/          ServiceTree, ConsoleView, ServiceForm, ImportPanel, BranchPanel, ...
 src-tauri/src/             백엔드 (Rust, Tauri 2)
   model.rs                 워크스페이스 JSON 모델
@@ -71,6 +72,7 @@ src-tauri/src/             백엔드 (Rust, Tauri 2)
   javamain.rs              java-main 클래스패스 계산·캐시
   git.rs                   git 저장소 찾기·현재 브랜치·브랜치 목록·전환·fetch·pull
   shell.rs                 트레이·창 닫기·알림
+  fonts.rs                 설치된 글꼴 목록 (DirectWrite)
   importers/               IntelliJ 실행 구성·package.json·Spring Boot 모듈·VS Code·공유 파일
 schema/                    워크스페이스 JSON Schema
 examples/                  워크스페이스 예시

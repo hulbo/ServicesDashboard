@@ -8,7 +8,8 @@
   /** 여러 서비스의 로그를 시간순으로 합쳐 보여 준다 (그룹·프리셋의 '통합 로그') */
   let { serviceIds }: { serviceIds: string[] } = $props()
 
-  const ROW = 18
+  /** 한 줄 높이: 설정의 콘솔 글자 크기를 따른다 (CSS --console-row와 같은 값) */
+  const ROW = $derived(app.consoleRow)
   const OVERSCAN = 30
   /** 서비스마다 최근 이만큼만 합친다 (합치는 비용을 일정하게) */
   const PER_SERVICE = 4000
@@ -313,8 +314,8 @@
     overflow: auto;
     outline: none;
     font-family: var(--font-mono);
-    font-size: 12.5px;
-    line-height: 18px;
+    font-size: var(--console-font-size);
+    line-height: var(--console-row);
     color: var(--console-fg);
     tab-size: 4;
   }
@@ -324,7 +325,7 @@
     min-width: 100%;
   }
   .line {
-    height: 18px;
+    height: var(--console-row);
     padding: 0 12px;
     white-space: pre;
   }

@@ -179,6 +179,25 @@ export interface AppSettings {
   logFiles: { enabled: boolean; retentionDays: number }
   /** 직접 시작·재시작할 때 이전 실행의 콘솔 로그를 지운다 */
   clearConsoleOnStart: boolean
+  fonts: FontSettings
+}
+
+/** 화면·콘솔 글꼴. 이름이 비어 있으면 기본 글꼴 */
+export interface FontSettings {
+  ui: string
+  mono: string
+  /** 콘솔 글자 크기(px) */
+  consoleSize: number
+}
+
+/** 설치된 글꼴 패밀리 */
+export interface FontFamily {
+  /** CSS font-family에 쓰는 이름 */
+  name: string
+  /** 한국어 이름 (있으면) */
+  local?: string
+  /** 고정폭 글꼴 */
+  mono: boolean
 }
 
 export const STREAM_OUT = 0

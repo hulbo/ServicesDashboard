@@ -33,6 +33,44 @@ pub struct Settings {
     /// 서비스를 직접 시작·재시작할 때 이전 실행의 콘솔 로그를 지운다 (자동 재시작은 지우지 않음)
     #[serde(default = "yes")]
     pub clear_console_on_start: bool,
+    #[serde(default)]
+    pub fonts: FontSettings,
+}
+
+/// 화면·콘솔 글꼴. 이름이 비어 있으면 기본 글꼴을 쓴다.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FontSettings {
+    #[serde(default)]
+    pub ui: String,
+    #[serde(default)]
+    pub mono: String,
+    /// 콘솔 글자 크기(px)
+    #[serde(default = "default_console_size")]
+    pub console_size: f32,
+}
+
+impl Default for FontSettings {
+    fn default() -> Self {
+        FontSettings { ui: String::new(), mono: String::new(), console_size: default_console_size() }
+    }
+}
+
+impl FontSettings {
+    pub const MIN_SIZE: f32 = 9.0;
+    pub const MAX_SIZE: f32 = 24.0;
+
+    /// 잘못된 값(직접 고친 파일 등)을 쓸 수 있는 값으로 바로잡는다.
+    pub fn sanitized(mut self) -> Self {
+        self.ui = self.ui.trim().to_string();
+        self.mono = self.mono.trim().to_string();
+        self.console_size = if self.console_size.is_finite() {
+            ((self.console_size * 2.0).round() / 2.0).clamp(Self::MIN_SIZE, Self::MAX_SIZE)
+        } else {
+            default_console_size()
+        };
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,6 +95,10 @@ fn default_retention() -> u32 {
     7
 }
 
+fn default_console_size() -> f32 {
+    12.5
+}
+
 impl Default for LogFileSettings {
     fn default() -> Self {
         LogFileSettings { enabled: false, retention_days: default_retention() }
@@ -71,6 +113,7 @@ impl Default for Settings {
             notifications: true,
             log_files: LogFileSettings::default(),
             clear_console_on_start: true,
+            fonts: FontSettings::default(),
         }
     }
 }
@@ -105,7 +148,7 @@ impl Store {
         }
 
         let settings_path = base_dir.join("settings.json");
-        let settings: Settings = match fs::read_to_string(&settings_path) {
+        let mut settings: Settings = match fs::read_to_string(&settings_path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
             Err(_) => {
                 let s = Settings::default();
@@ -113,6 +156,8 @@ impl Store {
                 s
             }
         };
+
+        settings.fonts = settings.fonts.sanitized();
 
         let file_name = sanitize_file_name(&settings.current_workspace);
         let workspace_path = ws_dir.join(format!("{file_name}.json"));
@@ -189,6 +234,20 @@ fn custom_base_dir() -> Option<String> {
 mod tests {
     use super::*;
     use crate::model::Service;
+
+    #[test]
+    fn font_settings_default_and_sanitize() {
+        // 예전 설정 파일(글꼴 항목 없음)은 기본값
+        let old: Settings = serde_json::from_str(r#"{"currentWorkspace":"default"}"#).unwrap();
+        assert_eq!(old.fonts, FontSettings::default());
+        assert_eq!(old.fonts.console_size, 12.5);
+        let f = FontSettings { ui: "  D2Coding ".into(), mono: String::new(), console_size: 40.0 }.sanitized();
+        assert_eq!((f.ui.as_str(), f.console_size), ("D2Coding", FontSettings::MAX_SIZE));
+        assert_eq!(FontSettings { console_size: 13.3, ..Default::default() }.sanitized().console_size, 13.5);
+        assert_eq!(FontSettings { console_size: 1.0, ..Default::default() }.sanitized().console_size, FontSettings::MIN_SIZE);
+        let json = serde_json::to_value(Settings::default()).unwrap();
+        assert_eq!(json["fonts"], serde_json::json!({ "ui": "", "mono": "", "consoleSize": 12.5 }));
+    }
 
     #[test]
     fn creates_layout_and_round_trips() {

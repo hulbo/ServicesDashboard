@@ -194,6 +194,7 @@ export function createMockBackend(): Backend {
     notifications: true,
     logFiles: { enabled: false, retentionDays: 7 },
     clearConsoleOnStart: true,
+    fonts: { ui: '', mono: '', consoleSize: 12.5 },
   }
   /** 직접 시작할 때 이전 로그 지우기 (실제 백엔드의 reset 묶음과 같게) */
   const resetLogs = (id: string) => {
@@ -436,6 +437,18 @@ export function createMockBackend(): Backend {
       settings = structuredClone(next)
       return structuredClone(settings)
     },
+    // 브라우저에 흔히 있는 글꼴 (실제 목록은 Windows DirectWrite에서 읽는다)
+    systemFonts: async () => [
+      { name: 'Arial', mono: false },
+      { name: 'Cascadia Mono', mono: true },
+      { name: 'Consolas', mono: true },
+      { name: 'Courier New', mono: true },
+      { name: 'D2Coding', mono: true },
+      { name: 'Gulim', local: '굴림', mono: false },
+      { name: 'Malgun Gothic', local: '맑은 고딕', mono: false },
+      { name: 'Segoe UI', mono: false },
+      { name: 'Times New Roman', mono: false },
+    ],
     logsExport: async (id) => (logs.get(id) ?? []).length,
     logsDir: async (id) => `C:/Users/me/AppData/Roaming/ServicesDashboard/logs/${id}`,
     pickSaveFile: async (name) => window.prompt('저장할 파일 경로 (미리보기)', `C:/temp/${name}`) || null,

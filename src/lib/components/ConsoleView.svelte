@@ -7,7 +7,8 @@
 
   let { serviceId }: { serviceId: string } = $props()
 
-  const ROW = 18
+  /** 한 줄 높이: 설정의 콘솔 글자 크기를 따른다 (CSS --console-row와 같은 값) */
+  const ROW = $derived(app.consoleRow)
   const OVERSCAN = 30
 
   let viewport: HTMLDivElement | undefined = $state()
@@ -450,8 +451,8 @@
     overflow: auto;
     outline: none;
     font-family: var(--font-mono);
-    font-size: 12.5px;
-    line-height: 18px;
+    font-size: var(--console-font-size);
+    line-height: var(--console-row);
     color: var(--console-fg);
     tab-size: 4;
   }
@@ -464,7 +465,7 @@
     will-change: transform;
   }
   .line {
-    height: 18px;
+    height: var(--console-row);
     padding: 0 12px;
     white-space: pre;
   }
@@ -508,7 +509,7 @@
   }
   .fold {
     display: block;
-    height: 18px;
+    height: var(--console-row);
     margin: 0 12px;
     padding: 0 8px;
     border: 0;
@@ -517,7 +518,7 @@
     color: var(--muted);
     font-family: var(--font-ui);
     font-size: 11.5px;
-    line-height: 18px;
+    line-height: var(--console-row);
     text-align: left;
     cursor: pointer;
   }

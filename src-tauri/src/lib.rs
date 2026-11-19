@@ -1,4 +1,5 @@
 mod commands;
+mod fonts;
 mod git;
 mod importers;
 mod javamain;
@@ -116,6 +117,7 @@ pub fn run() {
             commands::process_kill,
             commands::settings_get,
             commands::settings_save,
+            commands::system_fonts,
             commands::logs_export,
             commands::logs_dir,
             commands::open_path,

@@ -613,13 +613,20 @@ pub async fn process_kill(core: Core<'_>, pid: u32) -> Result<(), String> {
     .await
 }
 
+/// 설치된 글꼴 목록. 처음 한 번 읽는 데 수십 ms가 걸려 별도 스레드에서 돈다.
+#[tauri::command]
+pub async fn system_fonts() -> Result<Vec<crate::fonts::FontFamily>, String> {
+    crate::fonts::system_fonts()
+}
+
 #[tauri::command]
 pub fn settings_get(core: Core) -> Settings {
     core.settings.lock().unwrap().clone()
 }
 
 #[tauri::command]
-pub fn settings_save(core: Core, settings: Settings) -> Result<Settings, String> {
+pub fn settings_save(core: Core, mut settings: Settings) -> Result<Settings, String> {
+    settings.fonts = settings.fonts.sanitized();
     core.store.save_settings(&settings)?;
     core.files.configure(settings.log_files.enabled, settings.log_files.retention_days);
     core.files.cleanup();

@@ -47,8 +47,11 @@
   --ansi-14: #4fd1dc;
   --ansi-15: #ffffff;
 
-  --font-ui: 'Pretendard', 'Malgun Gothic', 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'D2Coding', 'Cascadia Mono', Consolas, 'Malgun Gothic', monospace;
+  /* 설정 → 글꼴에서 고른 글꼴(--user-font-*)을 맨 앞에 두고, 없는 글자는 기본 글꼴로 이어진다 */
+  --font-ui: var(--user-font-ui, 'Pretendard'), 'Pretendard', 'Malgun Gothic', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: var(--user-font-mono, 'JetBrains Mono'), 'JetBrains Mono', 'D2Coding', 'Cascadia Mono', Consolas, 'Malgun Gothic', monospace;
+  --console-font-size: 12.5px;
+  --console-row: 18px;
 }
 
 @media (prefers-color-scheme: light) {
