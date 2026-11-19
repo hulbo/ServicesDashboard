@@ -5,7 +5,7 @@
   import { joinArgs, parsePorts, splitArgs, splitLines, splitList } from '../args'
   import { cleanForSave, normalizeForEdit, usesArgs, usesColorInject, usesJvmArgs, usesUtf8Inject } from '../service-edit'
   import type { EnvMap, Service, ServiceKind } from '../types'
-  import { JAVA_KINDS, KIND_LABELS, MAIN_CLASS_KINDS, MAVEN_KINDS, NODE_KINDS, SOURCE_LABELS, SPRING_KINDS, isActive } from '../types'
+  import { DEFAULT_READY_HINT, JAVA_KINDS, KIND_LABELS, MAIN_CLASS_KINDS, MAVEN_KINDS, NODE_KINDS, SOURCE_LABELS, SPRING_KINDS, isActive } from '../types'
   import Icon from './Icon.svelte'
   import KeyValueEditor from './KeyValueEditor.svelte'
   import RuntimeSelect from './RuntimeSelect.svelte'
@@ -345,8 +345,48 @@
         <label for="f-ports">포트</label>
         <div>
           <input id="f-ports" value={(draft.ports ?? []).join(', ')} onchange={(e) => (draft.ports = parsePorts(e.currentTarget.value))} placeholder="8080" spellcheck="false" class="mono" />
-          <p class="hint">트리에 표시합니다. 포트 충돌 검사는 M3에서 추가됩니다.</p>
+          <p class="hint">시작 전에 이 포트(와 지난번 실행에서 감지한 포트)를 다른 프로세스가 쓰는지 확인합니다. 포트가 열리면 준비 완료로 봅니다.</p>
         </div>
+
+        {#if draft.readiness}
+          <span class="label">준비 감지</span>
+          <div class="checks">
+            <label class="check">
+              <input type="checkbox" checked={draft.readiness.disabled !== true} onchange={(e) => draft.readiness && (draft.readiness.disabled = !e.currentTarget.checked)} />
+              준비될 때까지 '시작 중'으로 표시
+            </label>
+            {#if draft.readiness.disabled !== true}
+              <input
+                aria-label="준비 로그 패턴"
+                bind:value={() => draft.readiness?.logPattern ?? '', (v) => draft.readiness && (draft.readiness.logPattern = v)}
+                placeholder={DEFAULT_READY_HINT[kind] ? `기본: ${DEFAULT_READY_HINT[kind]}` : '로그 정규식 (예: Server started)'}
+                spellcheck="false"
+                class="mono"
+              />
+              <input
+                aria-label="HTTP 헬스 URL"
+                bind:value={() => draft.readiness?.httpUrl ?? '', (v) => draft.readiness && (draft.readiness.httpUrl = v)}
+                placeholder="HTTP 헬스 URL (예: http://localhost:8080/actuator/health)"
+                spellcheck="false"
+                class="mono"
+              />
+              <div class="inline">
+                <input
+                  aria-label="제한 시간"
+                  type="number"
+                  min="1"
+                  max="3600"
+                  class="num"
+                  value={draft.readiness.timeoutSecs ?? ''}
+                  placeholder={['gradle-boot', 'maven-boot', 'java-main'].includes(kind) ? '300' : '120'}
+                  onchange={(e) => draft.readiness && (draft.readiness.timeoutSecs = e.currentTarget.value ? Number(e.currentTarget.value) : undefined)}
+                />
+                <span class="hint">초 안에 신호가 없으면 '실행 중'으로 바꿉니다.</span>
+              </div>
+              <p class="hint">로그 패턴·포트 열림·HTTP 응답 중 하나라도 확인되면 준비 완료입니다. 패턴을 비우면 타입별 기본값을 씁니다.</p>
+            {/if}
+          </div>
+        {/if}
 
         <label for="f-notes">메모</label>
         <textarea id="f-notes" rows="2" bind:value={() => draft.notes ?? '', (v) => (draft.notes = v)}></textarea>
@@ -510,8 +550,19 @@
   .checks {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
     padding-top: 4px;
+  }
+  .inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .inline .hint {
+    margin: 0;
+  }
+  .num {
+    width: 90px;
   }
   .check {
     display: flex;

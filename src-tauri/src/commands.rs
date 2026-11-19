@@ -7,11 +7,15 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::importers::{self, ScanContext, ScanResult};
 use crate::launch::{self, LaunchContext, LaunchPreview, LaunchSpec};
+use crate::logfile::{self, LogFiles};
 use crate::logs::{LogBatch, LogHub, LogLine, STREAM_SYS};
 use crate::model::{Service, Workspace};
+use crate::ports::{self, PortOwner};
 use crate::process::{EventSink, ProcessManager, ServiceStatus};
 use crate::runtime::{self, DetectEnv, RuntimeInfo};
-use crate::store::Store;
+use crate::store::{Settings, Store};
+use crate::vars::VarContext;
+use crate::watch::{self, ReadySpec};
 
 pub const EVENT_STATE: &str = "service://state";
 pub const EVENT_LOGS: &str = "service://logs";
@@ -21,6 +25,7 @@ pub struct TauriSink(pub AppHandle);
 impl EventSink for TauriSink {
     fn status(&self, status: &ServiceStatus) {
         let _ = self.0.emit(EVENT_STATE, status);
+        crate::shell::on_status(&self.0, status);
     }
     fn logs(&self, batches: Vec<LogBatch>) {
         let _ = self.0.emit(EVENT_LOGS, batches);
@@ -36,6 +41,8 @@ pub struct AppCore {
     /// 감지된 런타임 (처음 필요할 때 또는 앱 시작 직후 백그라운드에서 채운다)
     pub runtimes: Mutex<Option<Vec<RuntimeInfo>>>,
     pub detect_env: DetectEnv,
+    pub settings: Mutex<Settings>,
+    pub files: Arc<LogFiles>,
 }
 
 #[derive(Serialize)]
@@ -106,16 +113,82 @@ impl AppCore {
         )
     }
 
+    fn ready_spec(&self, ws: &Workspace, svc: &Service) -> Result<Option<ReadySpec>, String> {
+        let dir = self.store.workspace_dir();
+        let vars = VarContext::new(&ws.variables, &dir.to_string_lossy());
+        let http = vars.expand_opt(svc.readiness.as_ref().and_then(|r| r.http_url.as_ref()))?;
+        watch::ready_spec(svc, http)
+    }
+
+    /// 서비스가 쓸 포트(설정한 포트 + 지난번 실행에서 감지한 포트)를 점유한 프로세스
+    pub fn port_conflicts(&self, id: &str) -> Result<Vec<PortOwner>, String> {
+        let ws = self.current()?;
+        let svc = ws.service(id).ok_or_else(|| format!("서비스를 찾을 수 없습니다: {id}"))?;
+        let mut wanted = svc.ports.clone();
+        for p in self.manager.known_ports(id) {
+            if !wanted.contains(&p) {
+                wanted.push(p);
+            }
+        }
+        if wanted.is_empty() || self.manager.is_running(id) {
+            return Ok(Vec::new());
+        }
+        let mut owners = ports::owners(&wanted);
+        for o in &mut owners {
+            o.service_id = self.manager.service_owning(o.pid);
+        }
+        Ok(owners)
+    }
+
     pub fn start(&self, id: &str) -> Result<ServiceStatus, String> {
         let ws = self.current()?;
         let svc = ws.service(id).ok_or_else(|| format!("서비스를 찾을 수 없습니다: {id}"))?;
-        match self.build_spec(&ws, svc) {
-            Ok(spec) => self.manager.start(id, spec),
+        let prepared = self.build_spec(&ws, svc).and_then(|spec| Ok((spec, self.ready_spec(&ws, svc)?)));
+        let (spec, ready) = match prepared {
+            Ok(x) => x,
             Err(e) => {
                 self.logs.push(id, STREAM_SYS, format!("✕ 실행할 수 없습니다: {e}"));
-                Err(e)
+                return Err(e);
+            }
+        };
+        let conflicts = self.port_conflicts(id)?;
+        if !conflicts.is_empty() {
+            let names = ws.services.iter().map(|s| (s.id.as_str(), s.name.as_str())).collect::<std::collections::HashMap<_, _>>();
+            let list = conflicts
+                .iter()
+                .map(|o| match o.service_id.as_deref().and_then(|sid| names.get(sid)) {
+                    Some(n) => format!("{} (서비스 '{n}')", o.port),
+                    None => format!("{} ({}, PID {})", o.port, o.name, o.pid),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let msg = format!("포트가 이미 사용 중입니다: {list}");
+            self.logs.push(id, STREAM_SYS, format!("✕ {msg}"));
+            return Err(msg);
+        }
+        self.manager.start(id, spec, ready)
+    }
+
+    pub fn start_group(&self, group_id: &str) -> Vec<StartError> {
+        let mut errors = Vec::new();
+        let ids = match self.group_service_ids(group_id) {
+            Ok(ids) => ids,
+            Err(error) => return vec![StartError { id: group_id.into(), name: group_id.into(), error }],
+        };
+        for (sid, name) in ids {
+            if self.manager.is_running(&sid) {
+                continue;
+            }
+            if let Err(error) = self.start(&sid) {
+                errors.push(StartError { id: sid, name, error });
             }
         }
+        errors
+    }
+
+    pub fn stop_group(&self, group_id: &str) -> Result<(), String> {
+        let ids: Vec<String> = self.group_service_ids(group_id)?.into_iter().map(|(sid, _)| sid).collect();
+        self.manager.stop_many(&ids)
     }
 
     fn group_service_ids(&self, group_id: &str) -> Result<Vec<(String, String)>, String> {
@@ -150,19 +223,21 @@ pub fn workspace_get(core: Core) -> Result<WorkspaceInfo, String> {
 }
 
 #[tauri::command]
-pub fn workspace_reload(core: Core) -> Result<WorkspaceInfo, String> {
+pub fn workspace_reload(app: AppHandle, core: Core) -> Result<WorkspaceInfo, String> {
     let loaded = core.store.load();
     *core.workspace.lock().unwrap() = loaded;
+    crate::shell::refresh_tray(&app);
     core.info()
 }
 
 #[tauri::command]
-pub fn workspace_save(core: Core, workspace: Workspace) -> Result<Workspace, String> {
+pub fn workspace_save(app: AppHandle, core: Core, workspace: Workspace) -> Result<Workspace, String> {
     if let Err(e) = core.current() {
         return Err(format!("워크스페이스 파일 오류를 먼저 해결하세요: {e}"));
     }
     core.store.save(&workspace)?;
     *core.workspace.lock().unwrap() = Ok(workspace.clone());
+    crate::shell::refresh_tray(&app);
 
     // 삭제된 서비스가 실행 중이면 중지한다.
     let orphans: Vec<String> =
@@ -206,29 +281,13 @@ pub async fn service_restart(core: Core<'_>, id: String) -> Result<ServiceStatus
 #[tauri::command]
 pub async fn group_start(core: Core<'_>, id: String) -> Result<Vec<StartError>, String> {
     let core = core.inner().clone();
-    blocking(move || {
-        let mut errors = Vec::new();
-        for (sid, name) in core.group_service_ids(&id)? {
-            if core.manager.is_running(&sid) {
-                continue;
-            }
-            if let Err(error) = core.start(&sid) {
-                errors.push(StartError { id: sid, name, error });
-            }
-        }
-        Ok(errors)
-    })
-    .await
+    blocking(move || Ok(core.start_group(&id))).await
 }
 
 #[tauri::command]
 pub async fn group_stop(core: Core<'_>, id: String) -> Result<(), String> {
     let core = core.inner().clone();
-    blocking(move || {
-        let ids: Vec<String> = core.group_service_ids(&id)?.into_iter().map(|(sid, _)| sid).collect();
-        core.manager.stop_many(&ids)
-    })
-    .await
+    blocking(move || core.stop_group(&id)).await
 }
 
 #[tauri::command]
@@ -256,6 +315,50 @@ pub fn logs_clear(core: Core, id: String) {
 pub fn launch_preview(core: Core, service: Service) -> Result<LaunchPreview, String> {
     let ws = core.current()?;
     core.build_spec(&ws, &service).map(|s| LaunchPreview::from(&s))
+}
+
+#[tauri::command]
+pub async fn ports_check(core: Core<'_>, id: String) -> Result<Vec<PortOwner>, String> {
+    let core = core.inner().clone();
+    blocking(move || core.port_conflicts(&id)).await
+}
+
+/// 포트를 점유한 프로세스를 끝낸다. 대시보드 서비스면 그 서비스를 중지한다.
+#[tauri::command]
+pub async fn process_kill(core: Core<'_>, pid: u32) -> Result<(), String> {
+    let core = core.inner().clone();
+    blocking(move || match core.manager.service_owning(pid) {
+        Some(sid) => core.manager.stop(&sid),
+        None => ports::kill_tree(pid),
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn settings_get(core: Core) -> Settings {
+    core.settings.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn settings_save(core: Core, settings: Settings) -> Result<Settings, String> {
+    core.store.save_settings(&settings)?;
+    core.files.configure(settings.log_files.enabled, settings.log_files.retention_days);
+    core.files.cleanup();
+    *core.settings.lock().unwrap() = settings.clone();
+    Ok(settings)
+}
+
+#[tauri::command]
+pub fn logs_export(core: Core, id: String, path: String) -> Result<usize, String> {
+    logfile::export(&core.logs.snapshot(&id), std::path::Path::new(&path))
+}
+
+/// 서비스 로그 파일 폴더 (없으면 만든다)
+#[tauri::command]
+pub fn logs_dir(core: Core, id: String) -> Result<String, String> {
+    let dir = core.files.service_dir(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
 }
 
 #[tauri::command]

@@ -156,6 +156,30 @@
             }
           }
         },
+        "readiness": {
+          "type": "object",
+          "description": "준비(Ready) 감지. 없으면 타입별 기본값 (Spring Boot: 'Started … in N seconds', npm/node: 'Local: http://…' 등)",
+          "properties": {
+            "logPattern": {
+              "type": "string",
+              "description": "이 정규식과 맞는 로그 줄이 나오면 준비 완료"
+            },
+            "httpUrl": {
+              "type": "string",
+              "description": "2xx·3xx로 응답하면 준비 완료 (예: http://localhost:8080/actuator/health)"
+            },
+            "timeoutSecs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600,
+              "description": "이 시간 안에 신호가 없으면 '실행 중'으로 표시 (기본: Java 300초, 그 밖 120초)"
+            },
+            "disabled": {
+              "type": "boolean",
+              "description": "true면 준비 감지 없이 바로 '실행 중'"
+            }
+          }
+        },
         "spring": {
           "type": "object",
           "properties": {
@@ -262,7 +286,8 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 65535
-          }
+          },
+          "description": "사용 포트. 시작 전 충돌 검사와 준비 감지(포트 열림)에 쓴다"
         },
         "encoding": {
           "enum": [

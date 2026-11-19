@@ -37,6 +37,7 @@ export interface Service {
   mainClass?: string
   runtime?: { jdk?: string; node?: string; maven?: string; [extra: string]: unknown }
   inject?: { utf8?: boolean; color?: boolean; [extra: string]: unknown }
+  readiness?: { logPattern?: string; httpUrl?: string; timeoutSecs?: number; disabled?: boolean; [extra: string]: unknown }
   spring?: { profiles?: string[]; [extra: string]: unknown }
   npm?: { script: string; packageManager?: PackageManager; [extra: string]: unknown }
   node?: { entry: string; nodeArgs?: string[]; [extra: string]: unknown }
@@ -133,6 +134,23 @@ export interface ServiceStatus {
   runId: number
   command: string | null
   error: string | null
+  ports: number[]
+  urls: string[]
+  readyAt: number | null
+}
+
+export interface PortOwner {
+  port: number
+  pid: number
+  name: string
+  serviceId: string | null
+}
+
+export interface AppSettings {
+  currentWorkspace: string
+  closeToTray: boolean
+  notifications: boolean
+  logFiles: { enabled: boolean; retentionDays: number }
 }
 
 export const STREAM_OUT = 0
@@ -180,6 +198,16 @@ export const SPRING_KINDS: ServiceKind[] = ['gradle-boot', 'maven-boot', 'jar']
 export const NODE_KINDS: ServiceKind[] = ['npm', 'node']
 export const MAVEN_KINDS: ServiceKind[] = ['maven-boot', 'maven']
 export const MAIN_CLASS_KINDS: ServiceKind[] = ['gradle-boot', 'maven-boot', 'java-main']
+
+/** 타입별 기본 준비 감지 (백엔드 watch.rs와 같은 내용을 사람이 읽기 쉽게) */
+export const DEFAULT_READY_HINT: Partial<Record<ServiceKind, string>> = {
+  'gradle-boot': 'Started … in N seconds (Spring Boot)',
+  'maven-boot': 'Started … in N seconds (Spring Boot)',
+  'java-main': 'Started … in N seconds (Spring Boot)',
+  jar: 'Started … in N seconds (Spring Boot)',
+  npm: 'Local: http://…, ready in, compiled successfully, listening on … 등',
+  node: 'Local: http://…, ready in, compiled successfully, listening on … 등',
+}
 
 export const STATE_LABELS: Record<RunState, string> = {
   stopped: '중지됨',

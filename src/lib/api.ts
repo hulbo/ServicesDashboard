@@ -6,6 +6,8 @@ import type {
   LaunchPreview,
   LogBatch,
   LogLine,
+  AppSettings,
+  PortOwner,
   RuntimeInfo,
   ScanResult,
   Service,
@@ -33,6 +35,13 @@ export interface Backend {
   preview(service: Service): Promise<LaunchPreview>
   scanProject(root: string): Promise<ScanResult>
   detectRuntimes(refresh: boolean): Promise<RuntimeInfo[]>
+  portsCheck(id: string): Promise<PortOwner[]>
+  processKill(pid: number): Promise<void>
+  settingsGet(): Promise<AppSettings>
+  settingsSave(settings: AppSettings): Promise<AppSettings>
+  logsExport(id: string, path: string): Promise<number>
+  logsDir(id: string): Promise<string>
+  pickSaveFile(defaultName: string): Promise<string | null>
   openPath(path: string): Promise<void>
   openUrl(url: string): Promise<void>
   pickFolder(defaultPath?: string): Promise<string | null>
@@ -79,6 +88,16 @@ async function createTauriBackend(): Promise<Backend> {
     preview: (service) => call('launch_preview', { service }),
     scanProject: (root) => call('project_scan', { root }),
     detectRuntimes: (refresh) => call('runtimes_detect', { refresh }),
+    portsCheck: (id) => call('ports_check', { id }),
+    processKill: (pid) => call('process_kill', { pid }),
+    settingsGet: () => call('settings_get'),
+    settingsSave: (settings) => call('settings_save', { settings }),
+    logsExport: (id, path) => call('logs_export', { id, path }),
+    logsDir: (id) => call('logs_dir', { id }),
+    async pickSaveFile(defaultName) {
+      const r = await dialog.save({ defaultPath: defaultName, filters: [{ name: '로그', extensions: ['log', 'txt'] }] })
+      return typeof r === 'string' ? r : null
+    },
     openPath: (path) => call('open_path', { path }),
     openUrl: (url) => call('open_url', { url }),
     async pickFolder(defaultPath) {

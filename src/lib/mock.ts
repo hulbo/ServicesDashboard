@@ -3,7 +3,7 @@
 
 import type { Backend } from './api'
 import { joinArgs } from './args'
-import type { Candidate, LogBatch, LogLine, RuntimeInfo, ScanResult, Service, ServiceStatus, Workspace } from './types'
+import type { AppSettings, Candidate, LogBatch, LogLine, RuntimeInfo, ScanResult, Service, ServiceStatus, Workspace } from './types'
 import { STREAM_ERR, STREAM_OUT, STREAM_SYS } from './types'
 
 const sample: Workspace = {
@@ -184,6 +184,8 @@ export function createMockBackend(): Backend {
   const stateListeners = new Set<(s: ServiceStatus) => void>()
   const logListeners = new Set<(b: LogBatch[]) => void>()
   let runId = 1
+  let settings: AppSettings = { currentWorkspace: 'default', closeToTray: true, notifications: true, logFiles: { enabled: false, retentionDays: 7 } }
+  const occupied = new Map<number, { pid: number; name: string }>([[5174, { pid: 4242, name: 'node.exe' }]])
 
   const emitState = (s: ServiceStatus) => {
     statuses.set(s.id, s)
@@ -238,9 +240,11 @@ export function createMockBackend(): Backend {
     if (!svc) throw new Error(`서비스를 찾을 수 없습니다: ${id}`)
     if (statuses.get(id)?.state === 'running') throw new Error('이미 실행 중입니다.')
     const command = fakeCommand(svc)
+    const conflict = (svc.ports ?? []).filter((p) => occupied.has(p))
+    if (conflict.length) throw new Error(`포트가 이미 사용 중입니다: ${conflict.join(', ')}`)
     const status: ServiceStatus = {
       id,
-      state: 'running',
+      state: 'starting',
       pid: 10000 + Math.floor(Math.random() * 50000),
       exitCode: null,
       startedAt: Date.now(),
@@ -248,13 +252,24 @@ export function createMockBackend(): Backend {
       runId: runId++,
       command,
       error: null,
+      ports: [],
+      urls: [],
+      readyAt: null,
     }
+    const ready = (ms: number, urls: string[]) =>
+      later(id, ms, () => {
+        const cur = statuses.get(id)
+        if (cur?.state !== 'starting') return
+        push(id, STREAM_SYS, `✓ 준비 완료 (${(ms / 1000).toFixed(1)}초)`)
+        emitState({ ...cur, state: 'running', readyAt: Date.now(), urls, ports: urls.map((u) => Number(new URL(u).port)) })
+      })
     push(id, STREAM_SYS, `▶ ${command}`)
     push(id, STREAM_SYS, `  작업 디렉터리: ${(svc.cwd ?? '~').replace('${var:ROOT}', 'C:/Project/sample')}`)
     emitState(status)
 
     if (svc.type === 'npm' || svc.type === 'node') {
       viteLines.forEach((l, i) => later(id, 150 + i * 40, () => push(id, STREAM_OUT, l)))
+      ready(150 + 7 * 40 + 10, [`http://localhost:${svc.ports?.[0] ?? 5173}/`])
       every(id, 4000, () =>
         push(id, STREAM_OUT, `\x1b[2m${new Date().toLocaleTimeString()}\x1b[22m \x1b[36m\x1b[1m[vite]\x1b[22m\x1b[39m \x1b[32mhmr update \x1b[39m\x1b[2m/src/App.vue\x1b[22m`),
       )
@@ -269,6 +284,7 @@ export function createMockBackend(): Backend {
         [2350, ['INFO', 'k.e.portal.PortalApplication', 'Started PortalApplication in 3.412 seconds (process running for 3.9)']],
       ]
       for (const [ms, args] of boot) later(id, ms, () => push(id, STREAM_OUT, bootLog(...args)))
+      ready(2360, ['http://localhost:8080/'])
       later(id, 2600, () => {
         push(id, STREAM_OUT, bootLog('ERROR', 'o.a.c.c.C.[.[.[/].[dispatcherServlet]', '요청 처리 중 오류가 발생했습니다 (한글 로그 예시)'))
         push(id, STREAM_ERR, 'java.lang.IllegalStateException: 샘플 예외')
@@ -277,6 +293,7 @@ export function createMockBackend(): Backend {
       })
       every(id, 3000, () => push(id, STREAM_OUT, bootLog('DEBUG', 'k.e.portal.web.RequestLogFilter', `GET /api/health 200 ${Math.floor(Math.random() * 30)}ms`)))
     } else {
+      emitState({ ...statuses.get(id)!, state: 'running', readyAt: Date.now() })
       later(id, 200, () => push(id, STREAM_OUT, '[+] Running 1/1'))
       later(id, 400, () => push(id, STREAM_OUT, ' \x1b[32m✔\x1b[0m Container redis  Started'))
       later(id, 3000, () => {
@@ -336,6 +353,21 @@ export function createMockBackend(): Backend {
       logs.set(id, [])
     },
     preview: async (svc) => ({ command: fakeCommand(svc), cwd: (svc.cwd ?? '~').replace('${var:ROOT}', 'C:/Project/sample'), env: svc.env ?? {} }),
+    portsCheck: async (id) => {
+      const svc = workspace.services.find((s) => s.id === id)
+      return (svc?.ports ?? []).filter((p) => occupied.has(p)).map((p) => ({ port: p, ...occupied.get(p)!, serviceId: null }))
+    },
+    processKill: async (pid) => {
+      for (const [p, o] of occupied) if (o.pid === pid) occupied.delete(p)
+    },
+    settingsGet: async () => structuredClone(settings),
+    settingsSave: async (next) => {
+      settings = structuredClone(next)
+      return structuredClone(settings)
+    },
+    logsExport: async (id) => (logs.get(id) ?? []).length,
+    logsDir: async (id) => `C:/Users/me/AppData/Roaming/ServicesDashboard/logs/${id}`,
+    pickSaveFile: async (name) => window.prompt('저장할 파일 경로 (미리보기)', `C:/temp/${name}`) || null,
     scanProject: async (root) => {
       await new Promise((r) => setTimeout(r, 300))
       if (!root.trim()) throw new Error('폴더를 입력하세요.')

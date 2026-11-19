@@ -54,6 +54,7 @@ export function normalizeForEdit(src: Service): Service {
   s.shell.shell ??= 'cmd'
   s.encoding ??= 'auto'
   s.inject ??= {}
+  s.readiness ??= {}
   return s
 }
 
@@ -98,6 +99,7 @@ export function cleanForSave(src: Service): Service {
     if (s.inject.utf8 !== false) delete s.inject.utf8
     if (s.inject.color !== false) delete s.inject.color
   }
+  if (s.readiness && s.readiness.disabled !== true) delete s.readiness.disabled
   if (s.encoding === 'auto') delete s.encoding
   if (typeof s.name === 'string') s.name = s.name.trim() || '이름 없음'
   // id·name·type은 비어 있지 않으므로 prune에서 지워지지 않는다 (키 순서도 유지된다).

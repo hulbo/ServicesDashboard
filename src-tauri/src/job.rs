@@ -17,11 +17,13 @@ mod imp {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
         TerminateJobObject,
     };
-    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+    use windows_sys::Win32::System::Threading::{
+        CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
 
     pub struct Job {
         handle: HANDLE,
@@ -65,6 +67,20 @@ mod imp {
                 TerminateJobObject(self.handle, 1);
             }
         }
+
+        /// 이 Job에 속한 프로세스인지 (포트 점유 프로세스가 어느 서비스 것인지 알아낼 때 쓴다)
+        pub fn contains(&self, pid: u32) -> bool {
+            unsafe {
+                let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                if h.is_null() {
+                    return false;
+                }
+                let mut result = 0;
+                let ok = IsProcessInJob(h, self.handle, &mut result);
+                CloseHandle(h);
+                ok != 0 && result != 0
+            }
+        }
     }
 
     impl Drop for Job {
@@ -99,6 +115,10 @@ mod imp {
         pub fn assign(&self, child: &Child) -> io::Result<()> {
             self.pgid.store(child.id(), Ordering::SeqCst);
             Ok(())
+        }
+
+        pub fn contains(&self, _pid: u32) -> bool {
+            false
         }
 
         pub fn terminate(&self) {

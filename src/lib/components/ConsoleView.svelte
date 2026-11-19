@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { app } from '../state.svelte'
   import { errorMessage } from '../api'
+  import { buildRows, compileQuery, decorate, levelCounts, LEVEL_ERROR, LEVEL_WARN, type Level } from '../console-view'
   import Icon from './Icon.svelte'
 
   let { serviceId }: { serviceId: string } = $props()
@@ -10,6 +11,7 @@
   const OVERSCAN = 30
 
   let viewport: HTMLDivElement | undefined = $state()
+  let searchInput: HTMLInputElement | undefined = $state()
   let scrollTop = $state(0)
   let height = $state(400)
   let follow = $state(true)
@@ -17,18 +19,45 @@
   let lastRemoved = 0
   let lastId = ''
 
+  // 보기 옵션
+  let query = $state('')
+  let useRegex = $state(false)
+  let caseSensitive = $state(false)
+  let filterMode = $state(false)
+  let levels = $state<Level[]>([])
+  let foldFrames = $state(true)
+  let showTime = $state(false)
+  let expanded = $state<number[]>([])
+  let cursor = $state(-1)
+
   const store = $derived(app.logStore(serviceId))
   const version = $derived(app.logTick[serviceId] ?? 0)
-  const total = $derived.by(() => {
+  const compiled = $derived(compileQuery(query, useRegex, caseSensitive))
+  const queryRe = $derived(compiled instanceof RegExp ? compiled : null)
+  const view = $derived.by(() => {
+    void version
+    return buildRows(store.lines, {
+      query: queryRe,
+      filterMode,
+      levels: new Set(levels),
+      foldFrames,
+      expanded: new Set(expanded),
+    })
+  })
+  const counts = $derived.by(() => {
+    void version
+    return levelCounts(store.lines)
+  })
+  /** store는 반응형이 아니므로 version을 거쳐 줄 수를 읽는다 */
+  const lineCount = $derived.by(() => {
     void version
     return store.lines.length
   })
+  const total = $derived(view.rows.length)
   const first = $derived(Math.max(0, Math.floor(scrollTop / ROW) - OVERSCAN))
   const last = $derived(Math.min(total, Math.ceil((scrollTop + height) / ROW) + OVERSCAN))
-  const visible = $derived.by(() => {
-    void version
-    return store.lines.slice(first, last)
-  })
+  const visible = $derived(view.rows.slice(first, last).map((row, i) => ({ row, index: first + i })))
+  const currentRow = $derived(cursor >= 0 && cursor < view.matches.length ? view.matches[cursor] : -1)
   const unseen = $derived.by(() => {
     void version
     return follow ? 0 : Math.max(0, store.lastSeq - seenSeq)
@@ -39,29 +68,55 @@
     if (serviceId !== lastId) {
       lastId = serviceId
       follow = true
+      expanded = []
       lastRemoved = store.removedTotal
       void app.ensureLogs(serviceId)
     }
   })
 
-  // 새 로그가 오면: 따라가는 중이면 맨 아래로, 아니면 잘려 나간 줄만큼 위치를 보정한다.
+  // 새 로그: 따라가는 중이면 맨 아래로, 아니면 잘려 나간 줄만큼 위치를 보정한다.
   $effect(() => {
     void version
     const el = viewport
     if (!el) return
     const removed = store.removedTotal - lastRemoved
     lastRemoved = store.removedTotal
-    if (follow) {
+    if (untrack(() => follow)) {
       seenSeq = store.lastSeq
       void tick().then(() => {
         el.scrollTop = el.scrollHeight
         scrollTop = el.scrollTop
       })
-    } else if (removed > 0) {
+    } else if (removed > 0 && !untrack(() => query)) {
       el.scrollTop = Math.max(0, el.scrollTop - removed * ROW)
       scrollTop = el.scrollTop
     }
   })
+
+  // 검색어가 바뀌면 가장 최근 일치로 이동
+  $effect(() => {
+    void queryRe
+    void filterMode
+    const n = untrack(() => view.matches.length)
+    if (!queryRe) {
+      cursor = -1
+      return
+    }
+    if (n) void goTo(n - 1)
+    else cursor = -1
+  })
+
+  async function goTo(i: number) {
+    const n = view.matches.length
+    if (!n) return
+    cursor = ((i % n) + n) % n
+    follow = false
+    await tick()
+    const el = viewport
+    if (!el) return
+    el.scrollTop = Math.max(0, view.matches[cursor] * ROW - el.clientHeight / 2)
+    scrollTop = el.scrollTop
+  }
 
   function onScroll() {
     const el = viewport
@@ -80,6 +135,16 @@
     if (viewport) viewport.scrollTop = viewport.scrollHeight
   }
 
+  function toggleLevel(l: Level) {
+    levels = levels.includes(l) ? levels.filter((x) => x !== l) : [...levels, l]
+  }
+
+  function formatTime(ts: number) {
+    const d = new Date(ts)
+    const p = (n: number, w = 2) => String(n).padStart(w, '0')
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
+  }
+
   async function copyAll() {
     try {
       await navigator.clipboard.writeText(store.text())
@@ -89,41 +154,100 @@
     }
   }
 
+  async function saveToFile() {
+    const name = app.serviceName(serviceId).replace(/[\\/:*?"<>|]+/g, '_')
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
+    const path = await app.backend.pickSaveFile(`${name}-${stamp}.log`)
+    if (!path) return
+    try {
+      const n = await app.backend.logsExport(serviceId, path)
+      app.toast('success', `${n.toLocaleString()}줄을 저장했습니다: ${path}`)
+    } catch (e) {
+      app.toast('error', `저장 실패: ${errorMessage(e)}`)
+    }
+  }
+
   function onKeydown(e: KeyboardEvent) {
     if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
       e.preventDefault()
       void app.clearLogs(serviceId)
+    } else if (e.ctrlKey && (e.key === 'f' || e.key === 'F')) {
+      e.preventDefault()
+      searchInput?.focus()
+      searchInput?.select()
     } else if (e.key === 'End' && e.ctrlKey) {
       e.preventDefault()
       toBottom()
     }
   }
+
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void goTo(cursor + (e.shiftKey ? -1 : 1))
+    } else if (e.key === 'Escape') {
+      query = ''
+      filterMode = false
+      viewport?.focus()
+    }
+  }
+
+  function openLink(e: MouseEvent, href: string) {
+    e.preventDefault()
+    void app.backend.openUrl(href)
+  }
 </script>
 
-<div class="console">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="console" onkeydown={onKeydown}>
   <div class="bar">
-    <button class="tool" class:on={follow} title="자동 스크롤 (맨 아래 따라가기)" onclick={() => (follow ? (follow = false) : toBottom())}>
-      <Icon name="arrow-down" size={14} />
-      <span>자동 스크롤</span>
+    <label class="search" class:invalid={compiled === 'invalid'}>
+      <Icon name="search" size={13} />
+      <input bind:this={searchInput} bind:value={query} placeholder="검색 (Ctrl+F)" spellcheck="false" onkeydown={onSearchKey} aria-label="콘솔 검색" />
+      {#if query}
+        <span class="hits">{view.matches.length ? `${cursor + 1}/${view.matches.length}` : compiled === 'invalid' ? '정규식 오류' : '0'}</span>
+        <button class="mini up" title="이전 (Shift+Enter)" disabled={!view.matches.length} onclick={() => goTo(cursor - 1)}><Icon name="chevron-down" size={12} /></button>
+        <button class="mini" title="다음 (Enter)" disabled={!view.matches.length} onclick={() => goTo(cursor + 1)}><Icon name="chevron-down" size={12} /></button>
+      {/if}
+    </label>
+    <button class="tog" class:on={caseSensitive} title="대소문자 구분" onclick={() => (caseSensitive = !caseSensitive)}>Aa</button>
+    <button class="tog mono" class:on={useRegex} title="정규식" onclick={() => (useRegex = !useRegex)}>.*</button>
+    <button class="tog" class:on={filterMode} title="검색어가 있는 줄만 보기" disabled={!query} onclick={() => (filterMode = !filterMode)}>필터</button>
+    <span class="sep"></span>
+    <button class="tog lv err" class:on={levels.includes(LEVEL_ERROR)} title="ERROR 줄만 보기 (스택트레이스 포함)" onclick={() => toggleLevel(LEVEL_ERROR)}>
+      ERROR <b>{counts.error}</b>
     </button>
-    <span class="count">{total.toLocaleString()}줄</span>
+    <button class="tog lv warn" class:on={levels.includes(LEVEL_WARN)} title="WARN 줄만 보기" onclick={() => toggleLevel(LEVEL_WARN)}>
+      WARN <b>{counts.warn}</b>
+    </button>
     <span class="spacer"></span>
-    <button class="tool" title="전체 복사" disabled={total === 0} onclick={copyAll}><Icon name="copy" size={14} /></button>
-    <button class="tool" title="콘솔 지우기 (Ctrl+L)" disabled={total === 0} onclick={() => app.clearLogs(serviceId)}><Icon name="clear" size={14} /></button>
+    <button class="tog" class:on={foldFrames} title="긴 스택트레이스 접기" onclick={() => (foldFrames = !foldFrames)}>접기</button>
+    <button class="tog" class:on={showTime} title="수신 시각 표시" onclick={() => (showTime = !showTime)}>시각</button>
+    <button class="tool" class:on={follow} title="자동 스크롤 (Ctrl+End)" onclick={() => (follow ? (follow = false) : toBottom())}><Icon name="arrow-down" size={14} /></button>
+    <button class="tool" title="파일로 저장" disabled={lineCount === 0} onclick={saveToFile}><Icon name="file" size={14} /></button>
+    <button class="tool" title="전체 복사" disabled={lineCount === 0} onclick={copyAll}><Icon name="copy" size={14} /></button>
+    <button class="tool" title="콘솔 지우기 (Ctrl+L)" disabled={lineCount === 0} onclick={() => app.clearLogs(serviceId)}><Icon name="clear" size={14} /></button>
   </div>
 
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-  <div class="viewport" bind:this={viewport} bind:clientHeight={height} onscroll={onScroll} tabindex="0" role="log" aria-live="off" onkeydown={onKeydown}>
-    {#if total === 0}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div class="viewport" bind:this={viewport} bind:clientHeight={height} onscroll={onScroll} tabindex="0" role="log" aria-live="off">
+    {#if lineCount === 0}
       <div class="placeholder">
         <p>아직 로그가 없습니다.</p>
         <p class="sub">▶ 시작을 누르면 이곳에 콘솔 출력이 표시됩니다.</p>
       </div>
+    {:else if total === 0}
+      <div class="placeholder"><p>조건에 맞는 줄이 없습니다.</p></div>
     {:else}
       <div class="spacer-box" style="height:{total * ROW}px">
         <div class="rows" style="transform:translateY({first * ROW}px)">
-          {#each visible as line (line.seq)}
-            <div class="line s{line.stream}">{#each line.segments as seg, i (i)}<span style={seg.style}>{seg.text}</span>{/each}{#if line.segments.length === 0}&#8203;{/if}</div>
+          {#each visible as { row, index } (row.kind === 'line' ? row.line.seq : `f${row.key}`)}
+            {#if row.kind === 'fold'}
+              <button class="fold" onclick={() => (expanded = [...expanded, row.key])}>⋯ 스택트레이스 {row.count}줄 접힘 — 펼치기</button>
+            {:else}
+              {@const line = row.line}
+              <div class="line s{line.stream} lv{line.level}" class:current={index === currentRow}>{#if showTime}<span class="ts">{formatTime(line.ts)}</span>{/if}{#each decorate(line.segments, line.plain, queryRe) as p, i (i)}{#if p.href}<a href={p.href} style={p.style} class:match={p.match} title="클릭하면 브라우저에서 엽니다" onclick={(e) => openLink(e, p.href!)}>{p.text}</a>{:else}<span style={p.style} class:match={p.match}>{p.text}</span>{/if}{/each}{#if line.segments.length === 0}&#8203;{/if}</div>
+            {/if}
           {/each}
         </div>
       </div>
@@ -147,42 +271,122 @@
   .bar {
     display: flex;
     align-items: center;
-    gap: 4px;
-    height: 32px;
+    gap: 3px;
+    height: 34px;
     padding: 0 8px;
     border-bottom: 1px solid var(--border);
     background: var(--panel-2);
+    overflow: hidden;
   }
-  .tool {
+  .search {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
+    flex: 0 1 260px;
+    min-width: 140px;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid var(--input-border);
+    border-radius: 5px;
+    background: var(--input-bg);
+    color: var(--muted);
+  }
+  .search:focus-within {
+    border-color: var(--accent);
+  }
+  .search.invalid {
+    border-color: var(--err);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+  }
+  .hits {
+    color: var(--faint);
+    font-size: 11px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .mini {
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .mini.up {
+    transform: rotate(180deg);
+  }
+  .mini:hover:not(:disabled) {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .tog,
+  .tool {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
     height: 24px;
     padding: 0 7px;
-    border: 0;
+    border: 1px solid transparent;
     border-radius: 5px;
     background: none;
     color: var(--muted);
     font: inherit;
-    font-size: 12px;
+    font-size: 11.5px;
+    white-space: nowrap;
     cursor: pointer;
   }
+  .tool {
+    padding: 0 5px;
+  }
+  .tog:hover:not(:disabled),
   .tool:hover:not(:disabled) {
     background: var(--hover);
     color: var(--text);
   }
+  .tog.on,
   .tool.on {
     color: var(--accent-text);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
   }
+  .tog:disabled,
   .tool:disabled {
     opacity: 0.35;
     cursor: default;
   }
-  .count {
-    color: var(--faint);
-    font-size: 11.5px;
+  .tog b {
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
-    margin-left: 4px;
+  }
+  .lv.err b {
+    color: var(--err);
+  }
+  .lv.warn b {
+    color: var(--warn);
+  }
+  .mono {
+    font-family: var(--font-mono);
+  }
+  .sep {
+    flex: none;
+    width: 1px;
+    height: 16px;
+    margin: 0 3px;
+    background: var(--border-strong);
   }
   .spacer {
     flex: 1;
@@ -204,11 +408,11 @@
     min-width: 100%;
   }
   .rows {
-    padding: 0 12px;
     will-change: transform;
   }
   .line {
     height: 18px;
+    padding: 0 12px;
     white-space: pre;
   }
   .line.s1 {
@@ -216,6 +420,56 @@
   }
   .line.s2 {
     color: var(--console-sys);
+  }
+  .line.lv3 {
+    background: color-mix(in srgb, var(--err) 9%, transparent);
+  }
+  .line.lv2 {
+    background: color-mix(in srgb, var(--warn) 8%, transparent);
+  }
+  .line.current {
+    box-shadow: inset 3px 0 0 var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  .ts {
+    display: inline-block;
+    margin-right: 10px;
+    color: var(--faint);
+  }
+  .match {
+    background: color-mix(in srgb, var(--warn) 45%, transparent);
+    border-radius: 2px;
+  }
+  .line.current .match {
+    background: var(--warn);
+    color: #000;
+  }
+  a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 50%, transparent);
+    cursor: pointer;
+  }
+  a:hover {
+    text-decoration-color: currentColor;
+  }
+  .fold {
+    display: block;
+    height: 18px;
+    margin: 0 12px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 3px;
+    background: var(--hover);
+    color: var(--muted);
+    font-family: var(--font-ui);
+    font-size: 11.5px;
+    line-height: 18px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .fold:hover {
+    color: var(--text);
   }
   .line ::selection,
   .line::selection {

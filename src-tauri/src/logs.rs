@@ -8,6 +8,7 @@ use encoding_rs::EUC_KR;
 use indexmap::IndexMap;
 use serde::Serialize;
 
+use crate::logfile::LogFiles;
 use crate::model::OutputEncoding;
 
 pub const STREAM_OUT: u8 = 0;
@@ -48,6 +49,7 @@ struct HubInner {
 pub struct LogHub {
     inner: Mutex<HubInner>,
     capacity: usize,
+    files: Option<std::sync::Arc<LogFiles>>,
 }
 
 pub fn now_millis() -> u64 {
@@ -56,23 +58,36 @@ pub fn now_millis() -> u64 {
 
 impl LogHub {
     pub fn new(capacity: usize) -> Self {
-        LogHub { inner: Mutex::new(HubInner::default()), capacity: capacity.max(100) }
+        LogHub { inner: Mutex::new(HubInner::default()), capacity: capacity.max(100), files: None }
+    }
+
+    /// 로그 파일 저장을 함께 한다 (설정에서 켜고 끈다).
+    pub fn with_files(mut self, files: std::sync::Arc<LogFiles>) -> Self {
+        self.files = Some(files);
+        self
     }
 
     pub fn push(&self, id: &str, stream: u8, text: String) {
-        let mut inner = self.inner.lock().unwrap();
-        let buf = inner.buffers.entry(id.to_string()).or_default();
-        buf.next_seq += 1;
-        let line = LogLine { seq: buf.next_seq, ts: now_millis(), stream, text };
-        buf.lines.push_back(line.clone());
-        while buf.lines.len() > self.capacity {
-            buf.lines.pop_front();
-        }
-        let pending = inner.pending.entry(id.to_string()).or_default();
-        pending.push(line);
-        if pending.len() > self.capacity {
-            let excess = pending.len() - self.capacity;
-            pending.drain(..excess);
+        let line = {
+            let mut inner = self.inner.lock().unwrap();
+            let buf = inner.buffers.entry(id.to_string()).or_default();
+            buf.next_seq += 1;
+            let line = LogLine { seq: buf.next_seq, ts: now_millis(), stream, text };
+            buf.lines.push_back(line.clone());
+            while buf.lines.len() > self.capacity {
+                buf.lines.pop_front();
+            }
+            let pending = inner.pending.entry(id.to_string()).or_default();
+            pending.push(line.clone());
+            if pending.len() > self.capacity {
+                let excess = pending.len() - self.capacity;
+                pending.drain(..excess);
+            }
+            line
+        };
+        // 파일 쓰기는 버퍼 잠금 밖에서 한다.
+        if let Some(files) = &self.files {
+            files.write(id, &line);
         }
     }
 

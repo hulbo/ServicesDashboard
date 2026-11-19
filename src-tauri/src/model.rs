@@ -94,6 +94,9 @@ pub struct Service {
     /// 한글 깨짐 방지·컬러 로그 옵션 자동 추가 여부 (기본: 모두 켬)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inject: Option<InjectOpts>,
+    /// 준비(Ready) 감지 방법. 없으면 타입별 기본값을 쓴다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness: Option<ReadinessOpts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spring: Option<SpringOpts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -147,6 +150,25 @@ pub struct InjectOpts {
     /// Node: FORCE_COLOR=1, Spring Boot: --spring.output.ansi.enabled=always, Maven: -Dstyle.color=always
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<bool>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadinessOpts {
+    /// 이 정규식과 맞는 로그 줄이 나오면 준비 완료
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_pattern: Option<String>,
+    /// 2xx/3xx로 응답하면 준비 완료 (예: http://localhost:8080/actuator/health)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_url: Option<String>,
+    /// 이 시간 안에 준비 신호가 없으면 '실행 중'으로 바꾼다 (초)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// true면 준비 감지를 하지 않고 바로 '실행 중'으로 표시
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

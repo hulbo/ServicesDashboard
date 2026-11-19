@@ -17,20 +17,57 @@ use crate::model::Workspace;
 
 pub const SCHEMA_URL: &str = "https://raw.githubusercontent.com/hulbo/ServicesDashboard/main/schema/workspace.schema.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     #[serde(default = "default_workspace_name")]
     pub current_workspace: String,
+    /// 창을 닫으면 종료하지 않고 트레이로 내린다
+    #[serde(default = "yes")]
+    pub close_to_tray: bool,
+    /// 서비스 준비 완료·비정상 종료 알림
+    #[serde(default = "yes")]
+    pub notifications: bool,
+    #[serde(default)]
+    pub log_files: LogFileSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LogFileSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    /// 이 기간(일)이 지난 로그 파일은 지운다. 0이면 지우지 않는다.
+    #[serde(default = "default_retention")]
+    pub retention_days: u32,
 }
 
 fn default_workspace_name() -> String {
     "default".into()
 }
 
+fn yes() -> bool {
+    true
+}
+
+fn default_retention() -> u32 {
+    7
+}
+
+impl Default for LogFileSettings {
+    fn default() -> Self {
+        LogFileSettings { enabled: false, retention_days: default_retention() }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
-        Settings { current_workspace: default_workspace_name() }
+        Settings {
+            current_workspace: default_workspace_name(),
+            close_to_tray: true,
+            notifications: true,
+            log_files: LogFileSettings::default(),
+        }
     }
 }
 
@@ -38,6 +75,8 @@ pub struct Store {
     pub base_dir: PathBuf,
     pub workspace_path: PathBuf,
     pub gradle_init_script: PathBuf,
+    pub settings_path: PathBuf,
+    pub settings: Settings,
 }
 
 impl Store {
@@ -74,7 +113,18 @@ impl Store {
         let gradle_init_script = gradle_dir.join("sd-init.gradle");
         write_atomic(&gradle_init_script, GRADLE_INIT_SCRIPT)?;
 
-        Ok(Store { base_dir, workspace_path, gradle_init_script })
+        Ok(Store { base_dir, workspace_path, gradle_init_script, settings_path, settings })
+    }
+
+    pub fn logs_dir(&self) -> PathBuf {
+        self.base_dir.join("logs")
+    }
+
+    /// 앱 설정을 저장한다 (현재 워크스페이스 이름은 바꾸지 않는다).
+    pub fn save_settings(&self, settings: &Settings) -> Result<(), String> {
+        let mut s = settings.clone();
+        s.current_workspace = self.settings.current_workspace.clone();
+        write_atomic(&self.settings_path, &serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?)
     }
 
     pub fn workspace_dir(&self) -> PathBuf {
@@ -145,6 +195,24 @@ mod tests {
         fs::write(&store.workspace_path, "{ broken").unwrap();
         assert!(store.load().unwrap_err().contains("해석할 수 없습니다"));
         assert_eq!(fs::read_to_string(&store.workspace_path).unwrap(), "{ broken");
+    }
+
+    #[test]
+    fn settings_defaults_and_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("settings.json"), r#"{"currentWorkspace":"w1"}"#).unwrap();
+        let store = Store::open(dir.path().to_path_buf()).unwrap();
+        assert!(store.workspace_path.ends_with("w1.json"));
+        assert!(store.settings.close_to_tray && store.settings.notifications);
+        assert!(!store.settings.log_files.enabled);
+        let mut s = store.settings.clone();
+        s.close_to_tray = false;
+        s.log_files.enabled = true;
+        s.current_workspace = "다른 이름".into();
+        store.save_settings(&s).unwrap();
+        let again = Store::open(dir.path().to_path_buf()).unwrap();
+        assert!(!again.settings.close_to_tray && again.settings.log_files.enabled);
+        assert_eq!(again.settings.current_workspace, "w1", "워크스페이스 이름은 설정 저장으로 바뀌지 않는다");
     }
 
     #[test]

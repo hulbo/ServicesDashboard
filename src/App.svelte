@@ -8,6 +8,8 @@
   import WorkspaceSettings from './lib/components/WorkspaceSettings.svelte'
   import ImportPanel from './lib/components/ImportPanel.svelte'
   import RuntimesPanel from './lib/components/RuntimesPanel.svelte'
+  import SettingsPanel from './lib/components/SettingsPanel.svelte'
+  import PortConflictDialog from './lib/components/PortConflictDialog.svelte'
   import Toasts from './lib/components/Toasts.svelte'
 
   let initError = $state<string | null>(null)
@@ -100,6 +102,8 @@
         <ImportPanel />
       {:else if app.selection?.kind === 'runtimes'}
         <RuntimesPanel />
+      {:else if app.selection?.kind === 'settings'}
+        <SettingsPanel />
       {:else}
         <div class="center">
           <h2>Services Dashboard</h2>
@@ -135,6 +139,7 @@
 {/if}
 
 <Toasts />
+<PortConflictDialog />
 
 <style>
   .app {

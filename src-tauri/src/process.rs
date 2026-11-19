@@ -15,6 +15,10 @@ use crate::job::{self, Job};
 use crate::launch::LaunchSpec;
 use crate::logs::{self, LineAssembler, LogBatch, LogHub, STREAM_ERR, STREAM_OUT, STREAM_SYS};
 use crate::model::OutputEncoding;
+use crate::watch::{self, ReadySpec};
+
+/// 감지한 포트·URL을 이 개수까지만 보관한다.
+const MAX_FOUND: usize = 6;
 
 /// 줄바꿈 없이 이 시간 동안 출력이 멈추면 남은 내용을 한 줄로 내보낸다.
 const PARTIAL_FLUSH: Duration = Duration::from_millis(150);
@@ -25,8 +29,7 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 #[serde(rename_all = "lowercase")]
 pub enum RunState {
     Stopped,
-    /// 실행했지만 아직 준비(Ready) 전. M3의 준비 감지에서 쓴다.
-    #[allow(dead_code)]
+    /// 실행했지만 아직 준비(Ready) 전 (로그 패턴·포트·HTTP 확인을 기다리는 중)
     Starting,
     Running,
     Stopping,
@@ -48,6 +51,12 @@ pub struct ServiceStatus {
     pub run_id: u64,
     pub command: Option<String>,
     pub error: Option<String>,
+    /// 로그에서 감지한 포트
+    pub ports: Vec<u16>,
+    /// 로그에서 감지한 로컬 URL
+    pub urls: Vec<String>,
+    /// 준비 완료 시각
+    pub ready_at: Option<u64>,
 }
 
 impl ServiceStatus {
@@ -62,9 +71,15 @@ impl ServiceStatus {
             run_id: 0,
             command: None,
             error: None,
+            ports: Vec::new(),
+            urls: Vec::new(),
+            ready_at: None,
         }
     }
 }
+
+/// 출력 한 줄을 받는 콜백 (준비 감지·포트 감지)
+type LineHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub trait EventSink: Send + Sync + 'static {
     fn status(&self, status: &ServiceStatus);
@@ -85,6 +100,8 @@ pub struct ProcessManager {
     logs: Arc<LogHub>,
     sink: Arc<dyn EventSink>,
     next_run: AtomicU64,
+    /// 서비스별로 지금까지 감지한 포트 (다음 시작 전 포트 충돌 검사에 쓴다)
+    known_ports: Mutex<HashMap<String, Vec<u16>>>,
 }
 
 impl ProcessManager {
@@ -96,7 +113,17 @@ impl ProcessManager {
             logs,
             sink,
             next_run: AtomicU64::new(1),
+            known_ports: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn known_ports(&self, id: &str) -> Vec<u16> {
+        self.known_ports.lock().unwrap().get(id).cloned().unwrap_or_default()
+    }
+
+    /// 이 PID가 실행 중인 서비스의 프로세스 트리에 속하면 그 서비스 ID
+    pub fn service_owning(&self, pid: u32) -> Option<String> {
+        self.running.lock().unwrap().iter().find(|(_, r)| r.job.contains(pid)).map(|(id, _)| id.clone())
     }
 
     pub fn statuses(&self) -> Vec<ServiceStatus> {
@@ -120,7 +147,8 @@ impl ProcessManager {
         self.sink.status(&status);
     }
 
-    pub fn start(self: &Arc<Self>, id: &str, spec: LaunchSpec) -> Result<ServiceStatus, String> {
+    /// `ready`가 있으면 '시작 중'으로 두었다가 준비 신호를 받으면 '실행 중'으로 바꾼다.
+    pub fn start(self: &Arc<Self>, id: &str, spec: LaunchSpec, ready: Option<ReadySpec>) -> Result<ServiceStatus, String> {
         if self.is_running(id) {
             return Err("이미 실행 중입니다.".into());
         }
@@ -168,7 +196,6 @@ impl ProcessManager {
         let pid = child.id();
         let started_at = logs::now_millis();
         let stop_requested = Arc::new(AtomicBool::new(false));
-        let output_done = self.spawn_output_pump(id, &mut child, spec.encoding);
 
         {
             let mut running = self.running.lock().unwrap();
@@ -184,7 +211,7 @@ impl ProcessManager {
         }
         let status = ServiceStatus {
             id: id.to_string(),
-            state: RunState::Running,
+            state: if ready.is_some() { RunState::Starting } else { RunState::Running },
             pid: Some(pid),
             exit_code: None,
             started_at: Some(started_at),
@@ -192,8 +219,23 @@ impl ProcessManager {
             run_id,
             command: Some(spec.display.clone()),
             error: None,
+            ports: Vec::new(),
+            urls: Vec::new(),
+            ready_at: if ready.is_some() { None } else { Some(started_at) },
         };
+        // 상태를 먼저 등록해야 출력 첫 줄부터 준비 신호를 놓치지 않는다.
         self.set_status(status.clone());
+
+        let watcher = {
+            let me = Arc::clone(self);
+            let id = id.to_string();
+            let ready = ready.clone();
+            Arc::new(move |text: &str| me.on_line(&id, run_id, ready.as_ref(), text)) as LineHook
+        };
+        let output_done = self.spawn_output_pump(id, &mut child, spec.encoding, watcher);
+        if let Some(r) = ready {
+            self.spawn_ready_probe(id, run_id, r);
+        }
 
         let me = Arc::clone(self);
         let id_owned = id.to_string();
@@ -206,7 +248,7 @@ impl ProcessManager {
     }
 
     /// stdout/stderr를 읽어 줄 단위로 LogHub에 넣는다. 모든 출력이 끝나면 반환한 채널로 알린다.
-    fn spawn_output_pump(&self, id: &str, child: &mut Child, encoding: OutputEncoding) -> mpsc::Receiver<()> {
+    fn spawn_output_pump(&self, id: &str, child: &mut Child, encoding: OutputEncoding, hook: LineHook) -> mpsc::Receiver<()> {
         enum Msg {
             Chunk(u8, Vec<u8>),
             Eof,
@@ -244,7 +286,11 @@ impl ProcessManager {
         let _ = thread::Builder::new().name(format!("lines-{id}")).spawn(move || {
             let mut asm = [LineAssembler::default(), LineAssembler::default()];
             let mut open = readers;
-            let push = |stream: u8, bytes: &[u8]| hub.push(&id, stream, logs::decode(bytes, encoding));
+            let push = |stream: u8, bytes: &[u8]| {
+                let text = logs::decode(bytes, encoding);
+                hook(&text);
+                hub.push(&id, stream, text);
+            };
             while open > 0 {
                 match rx.recv_timeout(PARTIAL_FLUSH) {
                     Ok(Msg::Chunk(stream, bytes)) => {
@@ -267,6 +313,104 @@ impl ProcessManager {
             let _ = done_tx.send(());
         });
         done_rx
+    }
+
+    fn is_starting(&self, id: &str, run_id: u64) -> bool {
+        self.statuses.lock().unwrap().get(id).is_some_and(|s| s.run_id == run_id && s.state == RunState::Starting)
+    }
+
+    /// 출력 한 줄마다: 준비 신호 확인, 포트·URL 감지
+    fn on_line(&self, id: &str, run_id: u64, ready: Option<&ReadySpec>, text: &str) {
+        let plain = watch::strip_ansi(text);
+        if let Some(spec) = ready {
+            if spec.matches(&plain) && self.is_starting(id, run_id) {
+                self.mark_ready(id, run_id, None);
+            }
+        }
+        let found = watch::detect(&plain);
+        if found.ports.is_empty() && found.urls.is_empty() {
+            return;
+        }
+        {
+            let mut known = self.known_ports.lock().unwrap();
+            let list = known.entry(id.to_string()).or_default();
+            for p in &found.ports {
+                if !list.contains(p) {
+                    list.push(*p);
+                }
+            }
+        }
+        let updated = {
+            let mut statuses = self.statuses.lock().unwrap();
+            let Some(st) = statuses.get_mut(id).filter(|s| s.run_id == run_id) else { return };
+            let mut changed = false;
+            for p in found.ports {
+                if !st.ports.contains(&p) && st.ports.len() < MAX_FOUND {
+                    st.ports.push(p);
+                    changed = true;
+                }
+            }
+            for u in found.urls {
+                if !st.urls.contains(&u) && st.urls.len() < MAX_FOUND {
+                    st.urls.push(u);
+                    changed = true;
+                }
+            }
+            changed.then(|| st.clone())
+        };
+        if let Some(st) = updated {
+            self.sink.status(&st);
+        }
+    }
+
+    fn mark_ready(&self, id: &str, run_id: u64, note: Option<String>) {
+        let updated = {
+            let mut statuses = self.statuses.lock().unwrap();
+            let Some(st) = statuses.get_mut(id).filter(|s| s.run_id == run_id && s.state == RunState::Starting) else {
+                return;
+            };
+            st.state = RunState::Running;
+            st.ready_at = Some(logs::now_millis());
+            st.clone()
+        };
+        let took = Duration::from_millis(updated.ready_at.unwrap_or(0).saturating_sub(updated.started_at.unwrap_or(0)));
+        let msg = note.unwrap_or_else(|| format!("✓ 준비 완료 ({})", format_duration(took)));
+        self.logs.push(id, STREAM_SYS, msg);
+        self.sink.status(&updated);
+    }
+
+    /// 포트·HTTP 확인과 제한 시간 처리 (준비될 때까지 1초마다)
+    fn spawn_ready_probe(self: &Arc<Self>, id: &str, run_id: u64, spec: ReadySpec) {
+        let me = Arc::clone(self);
+        let id = id.to_string();
+        let started = Instant::now();
+        let _ = thread::Builder::new().name(format!("ready-{id}")).spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(if spec.needs_probe() { 700 } else { 1000 }));
+                if !me.is_starting(&id, run_id) {
+                    return;
+                }
+                if let Some(p) = spec.ports.iter().find(|p| watch::port_open(**p)) {
+                    me.mark_ready(&id, run_id, Some(format!("✓ 준비 완료 (포트 {p} 응답, {})", format_duration(started.elapsed()))));
+                    return;
+                }
+                if let Some(url) = spec.http_url.as_deref().filter(|u| watch::http_ok(u)) {
+                    me.mark_ready(&id, run_id, Some(format!("✓ 준비 완료 ({url} 응답, {})", format_duration(started.elapsed()))));
+                    return;
+                }
+                if started.elapsed() >= spec.timeout {
+                    me.mark_ready(
+                        &id,
+                        run_id,
+                        Some(format!(
+                            "⚠ {}초 동안 준비 신호를 찾지 못해 '실행 중'으로 표시합니다. 설정의 준비 감지를 확인하세요.",
+                            spec.timeout.as_secs()
+                        )),
+                    );
+                    return;
+                }
+            }
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -317,6 +461,14 @@ impl ProcessManager {
         self.exited.notify_all();
         drop(job);
 
+        let (ports, urls, ready_at) = {
+            let statuses = self.statuses.lock().unwrap();
+            statuses
+                .get(&id)
+                .filter(|s| s.run_id == run_id)
+                .map(|s| (s.ports.clone(), s.urls.clone(), s.ready_at))
+                .unwrap_or_default()
+        };
         self.set_status(ServiceStatus {
             id,
             state,
@@ -327,6 +479,9 @@ impl ProcessManager {
             run_id,
             command: Some(display),
             error: None,
+            ports,
+            urls,
+            ready_at,
         });
     }
 
@@ -340,7 +495,7 @@ impl ProcessManager {
             r.run_id
         };
         let mut status = self.status(id);
-        if status.run_id == run_id && status.state == RunState::Running {
+        if status.run_id == run_id && matches!(status.state, RunState::Running | RunState::Starting) {
             status.state = RunState::Stopping;
             self.set_status(status);
         }
@@ -361,7 +516,7 @@ impl ProcessManager {
         }
         for (id, run_id) in &targets {
             let mut status = self.status(id);
-            if status.run_id == *run_id && status.state == RunState::Running {
+            if status.run_id == *run_id && matches!(status.state, RunState::Running | RunState::Starting) {
                 status.state = RunState::Stopping;
                 self.set_status(status);
             }
@@ -481,7 +636,7 @@ mod tests {
         } else {
             "echo out-line; echo $SD_TEST_VALUE; echo err-line 1>&2; exit 3"
         };
-        pm.start("t1", shell_spec(cmd)).unwrap();
+        pm.start("t1", shell_spec(cmd), None).unwrap();
         let s = wait_state(&pm, "t1", RunState::Failed);
         assert_eq!(s.exit_code, Some(3));
         let lines = hub.snapshot("t1");
@@ -498,7 +653,7 @@ mod tests {
         let pm = ProcessManager::new(hub.clone(), Arc::new(Collect::default()));
         // 자식 프로세스(ping/sleep)를 띄운 뒤 오래 기다리는 명령
         let cmd = if cfg!(windows) { "ping -n 60 127.0.0.1 > nul" } else { "sleep 60" };
-        let started = pm.start("t2", shell_spec(cmd)).unwrap();
+        let started = pm.start("t2", shell_spec(cmd), None).unwrap();
         assert_eq!(started.state, RunState::Running);
         thread::sleep(Duration::from_millis(500));
         let t = Instant::now();
@@ -508,7 +663,7 @@ mod tests {
         assert!(s.pid.is_none());
         assert!(texts(&hub, "t2").last().unwrap().contains("중지됨"));
         // 다시 시작할 수 있다
-        pm.start("t2", shell_spec("echo again")).unwrap();
+        pm.start("t2", shell_spec("echo again"), None).unwrap();
         wait_state(&pm, "t2", RunState::Exited);
     }
 
@@ -519,9 +674,63 @@ mod tests {
         let mut spec = shell_spec("x");
         spec.program = "definitely-not-a-real-program-xyz".into();
         spec.raw_tail = None;
-        let err = pm.start("t3", spec).unwrap_err();
+        let err = pm.start("t3", spec, None).unwrap_err();
         assert!(err.contains("찾을 수 없습니다"));
         assert_eq!(pm.status("t3").state, RunState::Failed);
+    }
+
+    fn ready(patterns: &[&str], ports: Vec<u16>, timeout_ms: u64) -> Option<ReadySpec> {
+        Some(ReadySpec {
+            patterns: patterns.iter().map(|p| regex::Regex::new(p).unwrap()).collect(),
+            ports,
+            http_url: None,
+            timeout: Duration::from_millis(timeout_ms),
+        })
+    }
+
+    #[test]
+    fn ready_by_log_pattern_and_detects_urls() {
+        let hub = Arc::new(LogHub::new(1000));
+        let pm = ProcessManager::new(hub.clone(), Arc::new(Collect::default()));
+        let cmd = if cfg!(windows) {
+            "echo booting & ping -n 2 127.0.0.1 > nul & echo Local: http://localhost:5173/ & echo Tomcat started on port 8080 (http) with context path '/api' & ping -n 30 127.0.0.1 > nul"
+        } else {
+            "echo booting; sleep 1; echo Local: http://localhost:5173/; echo \"Tomcat started on port 8080 (http) with context path '/api'\"; sleep 30"
+        };
+        let st = pm.start("r1", shell_spec(cmd), ready(&[r"Local:\s+https?://"], vec![], 60_000)).unwrap();
+        assert_eq!(st.state, RunState::Starting);
+        let s = wait_state(&pm, "r1", RunState::Running);
+        assert!(s.ready_at.is_some());
+        thread::sleep(Duration::from_millis(300));
+        let s = pm.status("r1");
+        assert_eq!(s.ports, vec![5173, 8080]);
+        assert_eq!(s.urls, vec!["http://localhost:5173/", "http://localhost:8080/api/"]);
+        assert!(texts(&hub, "r1").iter().any(|t| t.starts_with("✓ 준비 완료")));
+        assert_eq!(pm.known_ports("r1"), vec![5173, 8080]);
+        pm.stop("r1").unwrap();
+        // 종료 뒤에도 감지한 포트는 남는다 (다음 시작 전 충돌 검사용)
+        let s = wait_state(&pm, "r1", RunState::Stopped);
+        assert_eq!(s.ports, vec![5173, 8080]);
+    }
+
+    #[test]
+    fn ready_by_port_and_timeout() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hub = Arc::new(LogHub::new(1000));
+        let pm = ProcessManager::new(hub.clone(), Arc::new(Collect::default()));
+        let long = if cfg!(windows) { "ping -n 30 127.0.0.1 > nul" } else { "sleep 30" };
+        pm.start("p1", shell_spec(long), ready(&[], vec![port], 60_000)).unwrap();
+        wait_state(&pm, "p1", RunState::Running);
+        assert!(texts(&hub, "p1").iter().any(|t| t.contains(&format!("포트 {port} 응답"))));
+        pm.stop("p1").unwrap();
+
+        pm.start("p2", shell_spec(long), ready(&["never-matches"], vec![], 1500)).unwrap();
+        assert_eq!(pm.status("p2").state, RunState::Starting);
+        wait_state(&pm, "p2", RunState::Running);
+        assert!(texts(&hub, "p2").iter().any(|t| t.contains("준비 신호를 찾지 못해")));
+        pm.stop("p2").unwrap();
+        drop(listener);
     }
 
     #[test]

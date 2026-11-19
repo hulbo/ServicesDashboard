@@ -25,9 +25,19 @@
     return `${sec}초`
   }
 
+  /** 열 수 있는 주소: 실행 중이면 로그에서 감지한 URL, 아니면 설정한 포트 */
+  const links = $derived.by(() => {
+    if (active && st?.urls?.length) return st.urls.map((u) => ({ url: u, label: u.replace(/^https?:\/\/localhost/, '').replace(/\/$/, '') || u }))
+    return (service.ports ?? []).map((p) => ({ url: `http://localhost:${p}/`, label: `:${p}` }))
+  })
+
   const detail = $derived.by(() => {
     if (!st) return ''
-    if (state === 'running' || state === 'stopping') return `PID ${st.pid ?? '-'} · ${elapsed(st.startedAt, app.now)}`
+    if (state === 'starting') return `PID ${st.pid ?? '-'} · 준비 대기 ${elapsed(st.startedAt, app.now)}`
+    if (state === 'running' || state === 'stopping') {
+      const boot = st.readyAt && st.startedAt && st.readyAt > st.startedAt ? ` · 기동 ${((st.readyAt - st.startedAt) / 1000).toFixed(1)}초` : ''
+      return `PID ${st.pid ?? '-'} · ${elapsed(st.startedAt, app.now)}${boot}`
+    }
     if (state === 'failed' && st.exitCode !== null) return `종료 코드 ${st.exitCode}`
     if (state === 'failed' && st.error) return st.error
     return ''
@@ -41,11 +51,11 @@
       <h2 title={service.name}>{service.name}</h2>
       <span class="state st-{state}">{STATE_LABELS[state]}</span>
       {#if detail}<span class="sub" title={detail}>{detail}</span>{/if}
-      {#if service.ports?.length}
+      {#if links.length}
         <span class="ports">
-          {#each service.ports as p (p)}
-            <button class="port" class:live={active} title="브라우저로 열기" onclick={() => app.backend.openUrl(`http://localhost:${p}`)}>
-              :{p} <Icon name="external" size={11} />
+          {#each links as l (l.url)}
+            <button class="port" class:live={state === 'running'} title="{l.url} 브라우저로 열기" onclick={() => app.backend.openUrl(l.url)}>
+              {l.label} <Icon name="external" size={11} />
             </button>
           {/each}
         </span>

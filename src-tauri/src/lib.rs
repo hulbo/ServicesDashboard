@@ -2,12 +2,16 @@ mod commands;
 mod importers;
 mod job;
 mod launch;
+mod logfile;
 mod logs;
 mod model;
+mod ports;
 mod process;
 mod runtime;
+mod shell;
 mod store;
 mod vars;
+mod watch;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,11 +29,22 @@ const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        // 두 번째로 실행하면 새 창 대신 이미 떠 있는 창을 앞으로 가져온다 (첫 번째로 등록해야 한다).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| shell::show_main(app)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .on_window_event(shell::on_window_event)
         .setup(|app| {
             let store = Store::open(Store::default_base_dir())?;
-            let logs = Arc::new(LogHub::new(logs::DEFAULT_CAPACITY));
+            let settings = store.settings.clone();
+            let files = Arc::new(logfile::LogFiles::new(
+                store.logs_dir(),
+                settings.log_files.enabled,
+                settings.log_files.retention_days,
+            ));
+            files.cleanup();
+            let logs = Arc::new(LogHub::new(logs::DEFAULT_CAPACITY).with_files(files.clone()));
             let sink: Arc<dyn EventSink> = Arc::new(TauriSink(app.handle().clone()));
             let manager = ProcessManager::new(logs.clone(), sink.clone());
             let workspace = store.load();
@@ -40,8 +55,11 @@ pub fn run() {
                 logs: logs.clone(),
                 runtimes: Mutex::new(None),
                 detect_env: runtime::DetectEnv::from_system(),
+                settings: Mutex::new(settings),
+                files: files.clone(),
             });
             app.manage(core.clone());
+            shell::setup_tray(app.handle())?;
 
             // 런타임 감지는 수백 ms~수 초 걸릴 수 있어 미리 해 둔다.
             std::thread::Builder::new().name("runtime-detect".into()).spawn(move || {
@@ -55,6 +73,7 @@ pub fn run() {
                     if !batches.is_empty() {
                         sink.logs(batches);
                     }
+                    files.flush_if_due();
                 }
             })?;
             Ok(())
@@ -76,6 +95,12 @@ pub fn run() {
             commands::launch_preview,
             commands::runtimes_detect,
             commands::project_scan,
+            commands::ports_check,
+            commands::process_kill,
+            commands::settings_get,
+            commands::settings_save,
+            commands::logs_export,
+            commands::logs_dir,
             commands::open_path,
             commands::open_url,
         ])
@@ -88,6 +113,7 @@ pub fn run() {
         if let RunEvent::Exit = event {
             if let Some(core) = handle.try_state::<Arc<AppCore>>() {
                 core.manager.kill_all_now();
+                core.files.flush();
             }
         }
     });

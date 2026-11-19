@@ -62,6 +62,14 @@
     }
   }
 
+  async function openLogDir(id: string) {
+    try {
+      await app.backend.openPath(await app.backend.logsDir(id))
+    } catch (e) {
+      app.toast('error', errorMessage(e))
+    }
+  }
+
   function serviceMenu(e: MouseEvent, svc: Service) {
     e.preventDefault()
     app.select({ kind: 'service', id: svc.id })
@@ -81,6 +89,9 @@
         { label: '복제', icon: 'copy', action: () => app.duplicateService(svc.id) },
         'separator',
         { label: '작업 디렉터리 열기', icon: 'folder', action: () => openCwd(svc) },
+        ...(app.settings?.logFiles.enabled
+          ? ([{ label: '로그 파일 폴더 열기', icon: 'file', action: () => openLogDir(svc.id) }] as MenuEntry[])
+          : []),
         ...(svc.source?.key
           ? ([{ label: '원본에서 다시 가져오기', icon: 'refresh', action: () => app.resync(svc.id) }] as MenuEntry[])
           : []),
@@ -240,6 +251,9 @@
     <button class="tool" class:active={app.selection?.kind === 'runtimes'} title="런타임 (JDK·Node·Maven)" onclick={() => app.select({ kind: 'runtimes' })}>
       <Icon name="runtime" />
     </button>
+    <button class="tool" class:active={app.selection?.kind === 'settings'} title="설정 (트레이·알림·로그 파일)" onclick={() => app.select({ kind: 'settings' })}>
+      <Icon name="gear" />
+    </button>
     <button class="tool" class:active={app.selection?.kind === 'workspace'} title="워크스페이스 설정 (변수·공통 환경변수)" onclick={() => app.select({ kind: 'workspace' })}>
       <Icon name="workspace" />
     </button>
@@ -358,10 +372,13 @@
       <input class="rename" value={svc.name} use:focusSelect onkeydown={(e) => renameKey(e, svc.id)} onblur={(e) => app.rename(svc.id, e.currentTarget.value)} onclick={(e) => e.stopPropagation()} />
     {:else}
       <span class="name" title={svc.name}>{svc.name}</span>
+      {@const port = (active && st?.ports?.[0]) || svc.ports?.[0]}
       {#if st?.state === 'failed' && st.exitCode !== null}
         <span class="meta err">exit {st.exitCode}</span>
-      {:else if svc.ports?.length}
-        <span class="meta" class:live={active}>:{svc.ports[0]}</span>
+      {:else if st?.state === 'starting'}
+        <span class="meta warn">시작 중</span>
+      {:else if port}
+        <span class="meta" class:live={active}>:{port}</span>
       {/if}
       <span class="actions">
         {#if active}
@@ -542,6 +559,9 @@
   }
   .meta.err {
     color: var(--err);
+  }
+  .meta.warn {
+    color: var(--warn);
   }
   .actions {
     display: none;

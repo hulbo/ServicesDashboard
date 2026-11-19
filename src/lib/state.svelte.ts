@@ -3,10 +3,16 @@
 import { createBackend, errorMessage, type Backend } from './api'
 import { applyImport, type ImportItem } from './importing'
 import { LogStore } from './logstore'
-import type { AppInfo, Group, LogBatch, RuntimeInfo, ScanResult, Service, ServiceStatus, Workspace } from './types'
+import type { AppInfo, AppSettings, Group, LogBatch, PortOwner, RuntimeInfo, ScanResult, Service, ServiceStatus, Workspace } from './types'
 import { isActive } from './types'
 
-export type Selection = { kind: 'service' | 'group'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' }
+export type Selection = { kind: 'service' | 'group'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' | 'settings' }
+
+/** 시작하려는데 포트가 점유된 경우 보여 줄 대화상자 내용 */
+export interface PortConflict {
+  id: string
+  owners: PortOwner[]
+}
 export type DetailTab = 'console' | 'settings'
 
 export interface Toast {
@@ -62,6 +68,8 @@ class AppState {
   runtimesLoading = $state(false)
   /** 가져오기 화면에서 마지막으로 스캔한 폴더 */
   importRoot = $state('')
+  settings = $state<AppSettings | null>(null)
+  conflict = $state<PortConflict | null>(null)
 
   private logStores = new Map<string, LogStore>()
   private logsLoaded = new Set<string>()
@@ -95,6 +103,21 @@ class AppState {
     for (const s of await this.backend.statuses()) this.applyStatus(s)
     this.ready = true
     void this.loadRuntimes(false)
+    try {
+      this.settings = await this.backend.settingsGet()
+    } catch (e) {
+      this.toast('error', `설정을 읽지 못했습니다: ${errorMessage(e)}`)
+    }
+  }
+
+  async saveSettings(next: AppSettings) {
+    try {
+      this.settings = await this.backend.settingsSave(next)
+      return true
+    } catch (e) {
+      this.toast('error', `설정 저장 실패: ${errorMessage(e)}`)
+      return false
+    }
   }
 
   async loadRuntimes(refresh: boolean) {
@@ -188,8 +211,44 @@ class AppState {
     return this.workspace.services.find((s) => s.id === id)?.name ?? id
   }
 
+  /** 포트 충돌이면 대화상자를 띄우고, 아니면 일반 오류로 알린다. */
+  private async startOrConflict(id: string, fn: () => Promise<unknown>, label: string) {
+    try {
+      await fn()
+    } catch (e) {
+      const msg = errorMessage(e)
+      if (msg.startsWith('포트가 이미 사용 중')) {
+        const owners = await this.backend.portsCheck(id).catch(() => [])
+        if (owners.length) {
+          this.conflict = { id, owners }
+          return
+        }
+      }
+      this.toast('error', `${this.serviceName(id)} ${label} 실패: ${msg}`)
+    }
+  }
+
   start(id: string) {
-    return this.run(`${this.serviceName(id)} 시작 실패`, () => this.backend.start(id))
+    return this.startOrConflict(id, () => this.backend.start(id), '시작')
+  }
+
+  /** 충돌 대화상자에서 '종료하고 시작'을 눌렀을 때 */
+  async resolveConflict(kill: boolean) {
+    const c = this.conflict
+    this.conflict = null
+    if (!c || !kill) return
+    try {
+      for (const pid of new Set(c.owners.map((o) => o.pid))) await this.backend.processKill(pid)
+      // 포트가 실제로 풀릴 때까지 잠시 기다린다
+      for (let i = 0; i < 20; i++) {
+        if ((await this.backend.portsCheck(c.id)).length === 0) break
+        await new Promise((r) => setTimeout(r, 250))
+      }
+    } catch (e) {
+      this.toast('error', `프로세스 종료 실패: ${errorMessage(e)}`)
+      return
+    }
+    await this.start(c.id)
   }
 
   stop(id: string) {
@@ -197,7 +256,7 @@ class AppState {
   }
 
   restart(id: string) {
-    return this.run(`${this.serviceName(id)} 재시작 실패`, () => this.backend.restart(id))
+    return this.startOrConflict(id, () => this.backend.restart(id), '재시작')
   }
 
   toggle(id: string) {
