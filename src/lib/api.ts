@@ -3,6 +3,8 @@
 
 import type {
   AppInfo,
+  BranchInfo,
+  GitRepo,
   LaunchPreview,
   LogBatch,
   LogLine,
@@ -13,6 +15,7 @@ import type {
   Service,
   ServiceStatus,
   StartError,
+  SwitchResult,
   Workspace,
   WorkspaceInfo,
 } from './types'
@@ -54,6 +57,12 @@ export interface Backend {
   confirm(message: string, title?: string): Promise<boolean>
   onState(cb: (s: ServiceStatus) => void): Promise<() => void>
   onLogs(cb: (b: LogBatch[]) => void): Promise<() => void>
+  /** 서비스가 쓰는 git 저장소와 현재 브랜치 (가벼워서 자주 불러도 된다) */
+  gitRepos(): Promise<GitRepo[]>
+  gitBranches(root: string): Promise<BranchInfo>
+  gitFetch(root: string): Promise<void>
+  /** 실행 중인 서비스를 멈추고 전환한 뒤(선택하면 pull) 다시 시작한다 */
+  gitSwitch(root: string, branch: string, pull: boolean, restart: boolean): Promise<SwitchResult>
 }
 
 export function errorMessage(e: unknown): string {
@@ -126,6 +135,10 @@ async function createTauriBackend(): Promise<Backend> {
       dialog.ask(message, { title: title ?? 'Services Dashboard', kind: 'warning', okLabel: '확인', cancelLabel: '취소' }),
     onState: (cb) => listen<ServiceStatus>('service://state', (e) => cb(e.payload)),
     onLogs: (cb) => listen<LogBatch[]>('service://logs', (e) => cb(e.payload)),
+    gitRepos: () => call('git_repos'),
+    gitBranches: (root) => call('git_branches', { root }),
+    gitFetch: (root) => call('git_fetch', { root }),
+    gitSwitch: (root, branch, pull, restart) => call('git_switch', { root, branch, pull, restart }),
   }
 }
 

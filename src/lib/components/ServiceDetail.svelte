@@ -2,6 +2,7 @@
   import { app } from '../state.svelte'
   import type { Service } from '../types'
   import { DEBUG_KINDS, KIND_LABELS, STATE_LABELS, isActive } from '../types'
+  import { headLabel } from '../git'
   import ConsoleView from './ConsoleView.svelte'
   import Icon from './Icon.svelte'
   import ServiceForm from './ServiceForm.svelte'
@@ -13,6 +14,7 @@
   const state = $derived(st?.state ?? 'stopped')
   const active = $derived(isActive(state))
   const groupName = $derived(app.workspace.groups.find((g) => g.id === service.group)?.name)
+  const repo = $derived(app.repoOf(service.id))
 
   function elapsed(from: number | null | undefined, to: number): string {
     if (!from) return ''
@@ -84,7 +86,12 @@
   <nav class="tabs">
     <button class:active={app.tab === 'console'} onclick={() => (app.tab = 'console')}><Icon name="terminal" size={14} /> 콘솔</button>
     <button class:active={app.tab === 'settings'} onclick={() => (app.tab = 'settings')}><Icon name="gear" size={14} /> 설정</button>
-    <span class="meta">{KIND_LABELS[service.type]}{groupName ? ` · ${groupName}` : ''}</span>
+    <span class="meta">
+      {KIND_LABELS[service.type]}{groupName ? ` · ${groupName}` : ''}
+      {#if repo}
+        · <button class="branch" title="{repo.name} ({repo.root}) — 브랜치 보기·전환" onclick={() => app.openBranches(repo.root)}><Icon name="branch" size={11} /> {headLabel(repo)}</button>
+      {/if}
+    </span>
   </nav>
 
   <div class="body">
@@ -249,10 +256,29 @@
     border-bottom-color: var(--accent);
   }
   .tabs .meta {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     margin-left: auto;
     padding-bottom: 8px;
     color: var(--faint);
     font-size: 12px;
+  }
+  .tabs .meta .branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+  }
+  .tabs .meta .branch:hover {
+    color: var(--text);
+    border-color: var(--accent);
   }
   .body {
     flex: 1;

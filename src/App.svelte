@@ -11,6 +11,8 @@
   import SettingsPanel from './lib/components/SettingsPanel.svelte'
   import PortConflictDialog from './lib/components/PortConflictDialog.svelte'
   import PresetPanel from './lib/components/PresetPanel.svelte'
+  import BranchPanel from './lib/components/BranchPanel.svelte'
+  import { headLabel } from './lib/git'
   import Toasts from './lib/components/Toasts.svelte'
 
   let initError = $state<string | null>(null)
@@ -112,6 +114,8 @@
         <RuntimesPanel />
       {:else if app.selection?.kind === 'settings'}
         <SettingsPanel />
+      {:else if app.selection?.kind === 'branches'}
+        <BranchPanel />
       {:else}
         <div class="center">
           <h2>Services Dashboard</h2>
@@ -138,6 +142,14 @@
       <span>실행 {app.runningCount} / 전체 {app.workspace.services.length}</span>
       <span class="sep">·</span>
       <button class="ws" title={app.workspacePath} onclick={() => app.select({ kind: 'workspace' })}>{app.workspace.name || '워크스페이스'}</button>
+      {#each app.repos.slice(0, 4) as r (r.root)}
+        <span class="sep">·</span>
+        <button class="ws branch" title="{r.root} — 브랜치 보기·전환" onclick={() => app.openBranches(r.root)}>
+          <Icon name="branch" size={11} />
+          {app.repos.length > 1 ? `${r.name}: ` : ''}{headLabel(r)}
+        </button>
+      {/each}
+      {#if app.repos.length > 4}<button class="ws" onclick={() => app.openBranches()}>외 {app.repos.length - 4}개</button>{/if}
       <span class="spacer"></span>
       {#if app.backend.isMock}
         <span class="badge" title="일반 브라우저에서 열어 가짜 백엔드로 동작 중입니다. 실제 프로세스는 실행되지 않습니다.">브라우저 미리보기</span>
@@ -207,6 +219,15 @@
   }
   .ws:hover {
     color: var(--text);
+  }
+  .ws.branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .spacer {
     flex: 1;

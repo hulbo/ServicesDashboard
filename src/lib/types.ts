@@ -250,3 +250,44 @@ export const STATE_LABELS: Record<RunState, string> = {
 export function isActive(state: RunState | undefined): boolean {
   return state === 'running' || state === 'starting' || state === 'stopping' || state === 'waiting'
 }
+
+// ---------- git 브랜치 (src-tauri/src/git.rs, commands.rs)
+
+/** 서비스가 쓰는 git 저장소 하나 */
+export interface GitRepo {
+  /** 작업 트리 루트 */
+  root: string
+  /** 같은 경로의 워크스페이스 변수 이름, 없으면 폴더 이름 */
+  name: string
+  branch: string | null
+  /** detached HEAD일 때 짧은 커밋 해시 */
+  commit: string | null
+  /** 이 저장소 안에서 실행하는 서비스 */
+  services: string[]
+}
+
+export interface LocalBranch {
+  name: string
+  upstream: string | null
+}
+
+export interface BranchInfo {
+  root: string
+  head: { branch: string | null; commit: string | null }
+  /** 최근 커밋 순 */
+  locals: LocalBranch[]
+  /** 로컬 브랜치가 없는 원격 브랜치 */
+  remotes: string[]
+  /** 커밋하지 않은 변경 (`git status --porcelain` 줄) */
+  changes: string[]
+  ahead: number | null
+  behind: number | null
+}
+
+export interface SwitchResult {
+  branch: string
+  /** 전환하려고 중지한 서비스 */
+  stopped: string[]
+  restarted: boolean
+  warnings: string[]
+}

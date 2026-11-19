@@ -28,6 +28,7 @@
     | 'warning'
     | 'bug'
     | 'link'
+    | 'branch'
 </script>
 
 <script lang="ts">
@@ -119,6 +120,11 @@
     <path d="M8 4.5V13.5M4.5 9H2M14 9h-2.5M5 5.5L3.5 4M11 5.5L12.5 4M5 12.5L3.5 14M11 12.5l1.5 1.5" />
   {:else if name === 'link'}
     <path d="M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 0 1 4 4l-1 1M9 11.5l-1 1a2.8 2.8 0 0 1-4-4l1-1" />
+  {:else if name === 'branch'}
+    <circle cx="5" cy="3.5" r="1.5" />
+    <circle cx="5" cy="12.5" r="1.5" />
+    <circle cx="11" cy="4.5" r="1.5" />
+    <path d="M5 5v6M11 6c0 3.2-6 2.6-6 5" />
   {:else if name === 'warning'}
     <path d="M8 2.5L14 13H2z" />
     <path d="M8 6.5v3M8 11.3v.2" />

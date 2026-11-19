@@ -1,12 +1,13 @@
 // 앱 전역 상태 (Svelte 5 runes)
 
 import { createBackend, errorMessage, type Backend } from './api'
+import { detectHeadChanges, headLabel } from './git'
 import { applyImport, type ImportItem, type PresetItem } from './importing'
 import { LogStore } from './logstore'
-import type { AppInfo, AppSettings, Group, LogBatch, PortOwner, Preset, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
+import type { AppInfo, AppSettings, GitRepo, Group, LogBatch, PortOwner, Preset, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
 import { isActive } from './types'
 
-export type Selection = { kind: 'service' | 'group' | 'preset'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' | 'settings' }
+export type Selection = { kind: 'service' | 'group' | 'preset'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' | 'settings' | 'branches' }
 
 /** 시작하려는데 포트가 점유된 경우 보여 줄 대화상자 내용 */
 export interface PortConflict {
@@ -19,7 +20,12 @@ export interface Toast {
   id: number
   kind: 'info' | 'success' | 'error'
   text: string
+  /** 알림 안의 버튼 (누르면 알림도 닫힌다) */
+  action?: { label: string; run: () => void }
 }
+
+/** 밖에서 바꾼 브랜치를 확인하는 주기 */
+const GIT_POLL_MS = 3000
 
 const COLLAPSE_KEY = 'sd.collapsed'
 const SIDEBAR_KEY = 'sd.sidebarWidth'
@@ -70,7 +76,15 @@ class AppState {
   importRoot = $state('')
   settings = $state<AppSettings | null>(null)
   conflict = $state<PortConflict | null>(null)
+  /** 서비스가 쓰는 git 저장소와 현재 브랜치 */
+  repos = $state<GitRepo[]>([])
+  /** 브랜치 화면에서 펼친 저장소 */
+  branchFocus = $state<string | null>(null)
+  /** 이 앱이 브랜치를 바꾸는 중인 저장소 */
+  switching = $state<Record<string, boolean>>({})
 
+  /** 저장소별 마지막으로 본 HEAD (밖에서 바꾼 브랜치 감지용) */
+  private heads = new Map<string, string>()
   private logStores = new Map<string, LogStore>()
   private logsLoaded = new Set<string>()
   private toastSeq = 1
@@ -108,6 +122,14 @@ class AppState {
     await this.loadWorkspace(false)
     for (const s of await this.backend.statuses()) this.applyStatus(s)
     this.ready = true
+    void this.refreshRepos()
+    setInterval(() => {
+      if (!document.hidden) void this.refreshRepos()
+    }, GIT_POLL_MS)
+    // 트레이에 숨어 있던 동안 바뀐 브랜치도 창을 다시 열면 바로 알린다
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) void this.refreshRepos()
+    })
     void this.loadRuntimes(false)
     try {
       this.settings = await this.backend.settingsGet()
@@ -549,10 +571,72 @@ class AppState {
     writeLocal(SIDEBAR_KEY, this.sidebarWidth)
   }
 
-  toast(kind: Toast['kind'], text: string) {
+  toast(kind: Toast['kind'], text: string, action?: Toast['action']) {
     const id = this.toastSeq++
-    this.toasts.push({ id, kind, text })
-    setTimeout(() => this.dismiss(id), kind === 'error' ? 8000 : 4000)
+    this.toasts.push({ id, kind, text, action })
+    // 버튼이 있는 알림은 누를 시간을 넉넉히 준다
+    setTimeout(() => this.dismiss(id), action ? 30000 : kind === 'error' ? 8000 : 4000)
+  }
+
+  // ---------- git 브랜치 ----------
+
+  repoOf(serviceId: string): GitRepo | undefined {
+    return this.repos.find((r) => r.services.includes(serviceId))
+  }
+
+  openBranches(root?: string) {
+    this.branchFocus = root ?? (this.repos.length === 1 ? this.repos[0].root : this.branchFocus)
+    this.select({ kind: 'branches' })
+  }
+
+  /** 저장소 목록을 새로 읽고, 밖(IntelliJ·터미널)에서 바뀐 브랜치가 있으면 알린다. */
+  async refreshRepos() {
+    let list: GitRepo[]
+    try {
+      list = await this.backend.gitRepos()
+    } catch {
+      return // 워크스페이스 파일 오류 등: 브랜치 표시만 건너뛴다
+    }
+    const changed = detectHeadChanges(this.heads, list, new Set(Object.keys(this.switching)))
+    if (JSON.stringify(list) !== JSON.stringify($state.snapshot(this.repos))) this.repos = list
+    for (const c of changed) this.onExternalSwitch(c.repo, c.from)
+  }
+
+  private onExternalSwitch(repo: GitRepo, from: string) {
+    const running = repo.services.filter((id) => isActive(this.statuses[id]?.state))
+    const text = `${repo.name} 브랜치가 바뀌었습니다: ${from} → ${headLabel(repo)}`
+    if (!running.length) {
+      this.toast('info', text)
+      return
+    }
+    this.toast('info', `${text} · 실행 중인 서비스 ${running.length}개는 이전 코드로 떠 있습니다.`, {
+      label: `${running.length}개 재시작`,
+      run: () => void this.restartMany(running),
+    })
+  }
+
+  async restartMany(ids: string[]) {
+    for (const id of ids) await this.restart(id)
+  }
+
+  /** 브랜치 전환 (실행 중인 서비스 중지 → 전환 → pull → 다시 시작은 백엔드가 한다) */
+  async switchBranch(repo: GitRepo, branch: string, pull: boolean, restart: boolean): Promise<boolean> {
+    this.switching[repo.root] = true
+    try {
+      const r = await this.backend.gitSwitch(repo.root, branch, pull, restart)
+      const n = r.stopped.length
+      const tail = n ? (r.restarted ? ` · 서비스 ${n}개 다시 시작` : ` · 서비스 ${n}개 중지됨`) : ''
+      this.toast('success', `${repo.name}: ${r.branch} 브랜치로 전환했습니다${pull ? ' (pull 포함)' : ''}${tail}`)
+      for (const w of r.warnings) this.toast('error', w)
+      return true
+    } catch (e) {
+      this.toast('error', `브랜치 전환 실패: ${errorMessage(e)}`)
+      return false
+    } finally {
+      // 기록을 새 브랜치로 맞춘 뒤에 표시를 풀어야 '밖에서 바뀜' 알림이 뜨지 않는다
+      await this.refreshRepos()
+      delete this.switching[repo.root]
+    }
   }
 
   dismiss(id: number) {

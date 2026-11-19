@@ -4,7 +4,7 @@
 import type { Backend } from './api'
 import { joinArgs } from './args'
 import type { AppSettings, Candidate, LogBatch, LogLine, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
-import { STREAM_ERR, STREAM_OUT, STREAM_SYS } from './types'
+import { STREAM_ERR, STREAM_OUT, STREAM_SYS, isActive } from './types'
 
 const sample: Workspace = {
   name: 'sample',
@@ -190,6 +190,16 @@ export function createMockBackend(): Backend {
   let runId = 1
   let settings: AppSettings = { currentWorkspace: 'default', closeToTray: true, notifications: true, logFiles: { enabled: false, retentionDays: 7 } }
   const occupied = new Map<number, { pid: number; name: string }>([[5174, { pid: 4242, name: 'node.exe' }]])
+  // 가짜 git 저장소 (ROOT 변수 폴더)
+  const gitRoot = 'C:/Project/sample'
+  let gitHead = 'develop'
+  const gitLocals = [
+    { name: 'develop', upstream: 'origin/develop' },
+    { name: 'main', upstream: 'origin/main' },
+    { name: 'feature/login-page', upstream: null as string | null },
+  ]
+  const gitRemoteRefs = ['origin/develop', 'origin/main', 'origin/feature/payment', 'origin/hotfix/1.2.1']
+  const repoServices = () => workspace.services.filter((s) => (s.cwd ?? '').startsWith('${var:ROOT}')).map((s) => s.id)
 
   const emitState = (s: ServiceStatus) => {
     statuses.set(s.id, s)
@@ -437,6 +447,35 @@ export function createMockBackend(): Backend {
     onLogs: async (cb) => {
       logListeners.add(cb)
       return () => logListeners.delete(cb)
+    },
+    gitRepos: async () => [{ root: gitRoot, name: 'ROOT', branch: gitHead, commit: null, services: repoServices() }],
+    gitBranches: async () => {
+      await new Promise((r) => setTimeout(r, 200))
+      return {
+        root: gitRoot,
+        head: { branch: gitHead, commit: null },
+        locals: gitLocals.map((l) => ({ ...l })),
+        remotes: gitRemoteRefs.filter((r) => !gitLocals.some((l) => l.upstream === r || r === `origin/${l.name}`)),
+        changes: [],
+        ahead: 0,
+        behind: gitHead === 'develop' ? 2 : 0,
+      }
+    },
+    gitFetch: () => new Promise((r) => setTimeout(r, 600)),
+    gitSwitch: async (_root, branch, _pull, restart) => {
+      const local = branch.startsWith('origin/') ? branch.slice('origin/'.length) : branch
+      if (!gitLocals.some((l) => l.name === local)) {
+        if (!gitRemoteRefs.includes(branch)) throw new Error(`브랜치를 찾을 수 없습니다: ${branch}`)
+        gitLocals.unshift({ name: local, upstream: branch })
+      }
+      const ids = repoServices().filter((id) => isActive(statuses.get(id)?.state))
+      for (const id of ids) {
+        push(id, STREAM_SYS, `⎇ 브랜치 전환: ${gitHead} → ${branch}`)
+        await stop(id)
+      }
+      gitHead = local
+      if (restart) for (const id of ids) void launch(id)
+      return { branch: local, stopped: ids, restarted: restart && ids.length > 0, warnings: [] }
     },
   }
 }

@@ -48,6 +48,7 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | **자동 재시작 (M4)** | 비정상 종료되면 N회까지 점점 늘어나는 간격으로 다시 시작 (1분 넘게 실행되면 횟수 초기화) |
 | **디버그 모드 (M4)** | *디버그로 시작*(Shift+F9): Java는 JDWP(`127.0.0.1:5005`), Node는 `--inspect`(`9229`)를 붙여 실행. IDE에서 Remote JVM Debug·Attach로 연결 |
 | **java-main 빠른 기동 (M4)** | 메인 클래스를 java로 직접 실행. 처음엔 Gradle/Maven으로 컴파일·클래스패스를 계산해 캐시하고, 바뀐 소스가 없으면 다음부터 빌드 도구 없이 바로 뜸 |
+| **git 브랜치 (M5)** | 서비스가 쓰는 git 저장소별 현재 브랜치를 상태 표시줄·서비스 헤더에 표시. 브랜치 화면에서 로컬·원격 브랜치를 골라 전환하면 그 저장소의 실행 중인 서비스를 멈추고 전환(선택하면 `pull --ff-only`)한 뒤 다시 시작. IntelliJ·터미널에서 바꾼 브랜치도 몇 초 안에 감지해 *재시작* 버튼과 함께 알림 |
 | **통합 로그 (M4)** | 그룹·프리셋의 여러 서비스 로그를 시간순으로 한 화면에 (서비스 이름 색 구분, 필터, 서비스별 숨기기) |
 | **VS Code·공유 파일 (M4)** | `.vscode/launch.json`(node, npm, node-terminal, java, compounds) 가져오기. 워크스페이스 설정에서 서비스를 프로젝트 폴더의 `services-dashboard.json`(경로는 `${projectDir}`)으로 내보내 팀과 공유 |
 | **로그 파일 (M3)** | 설정에서 켜면 `설정 폴더\logs\<서비스 ID>\YYYY-MM-DD.log`에 저장, 보관 기간이 지나면 삭제 |
@@ -101,6 +102,17 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | 복합(Compound) | 실행 프리셋 |
 
 VS Code `.vscode/launch.json`과 프로젝트의 `services-dashboard.json`(공유 파일)도 같은 화면에서 함께 찾는다. 공유 파일이 있으면 그것을 기본으로 고른다.
+
+### 브랜치 바꾸기
+
+1. 왼쪽 위 **브랜치**(⑂) 버튼이나 아래 상태 표시줄의 브랜치 이름을 누른다. 서비스 작업 디렉터리가 들어 있는 git 저장소가 나온다 (이름은 같은 경로의 워크스페이스 변수, 없으면 폴더 이름).
+2. 저장소를 펼치고 브랜치를 고른다. 원격에만 있는 브랜치는 *가져와서 전환*을 누르면 같은 이름의 로컬 브랜치를 만들어 추적한다. 새 원격 브랜치가 안 보이면 *원격 가져오기 (fetch)*를 누른다.
+3. 전환하면 그 저장소에서 실행 중인 서비스를 멈추고 브랜치를 바꾼 뒤 다시 시작한다. *전환 후 pull*을 켜면 fast-forward만 허용해 원격과 맞춘다.
+
+- 커밋하지 않은 변경(추적 중인 파일)이 있으면 전환하지 않고 파일 목록을 알려 준다. 자동 stash는 하지 않는다. 새 파일(추적 안 함)은 막지 않는다.
+- 대시보드는 커밋·push를 하지 않는다. PC에 설치된 git을 쓴다 (PATH 또는 `C:\Program Files\Git`).
+- IntelliJ의 *Gradle 새로고침*은 따로 할 필요가 없다. Gradle 실행형 서비스는 시작할 때마다 `build.gradle`을 다시 읽어 의존성을 받고 바뀐 소스를 컴파일한다. `java-main`도 바뀐 소스·빌드 파일을 감지하면 다시 빌드한다.
+- 새 브랜치에서 IntelliJ 실행 구성(`.run/*.xml`) 자체가 바뀌었다면 서비스 우클릭 → *원본에서 다시 가져오기*.
 
 ### 직접 추가
 
@@ -185,6 +197,7 @@ src/                       프론트엔드 (Svelte 5 + TypeScript)
   lib/logstore.ts          콘솔 로그 버퍼
   lib/importing.ts         가져오기 후보 → 워크스페이스 반영 (변수 치환, 다시 가져오기 병합)
   lib/console-view.ts      콘솔 레벨·스택트레이스 접기·검색·필터·링크 계산
+  lib/git.ts               브랜치 표시·밖에서 바꾼 브랜치 감지
   lib/components/          ServiceTree, ConsoleView, ServiceForm, ImportPanel, RuntimesPanel, ...
 src-tauri/src/             백엔드 (Rust, Tauri 2)
   model.rs                 워크스페이스 JSON 모델
@@ -197,6 +210,7 @@ src-tauri/src/             백엔드 (Rust, Tauri 2)
   logfile.rs               로그 파일 저장·내보내기
   shell.rs                 트레이·창 닫기·알림
   javamain.rs              java-main 클래스패스 계산·캐시
+  git.rs                   git 저장소 찾기·현재 브랜치(.git/HEAD)·브랜치 목록·전환·fetch·pull
   importers/vscode.rs      VS Code launch.json, importers/shared.rs 공유 파일
   importers/               IntelliJ 실행 구성·package.json·Spring Boot 모듈 스캔
   logs.rs                  링 버퍼, 줄 조립, 인코딩 해석
@@ -215,6 +229,7 @@ docs/PLANNING.md           기획서
 | M2 | IntelliJ·package.json·Spring Boot 가져오기, JDK / Node / Maven 런타임 감지, 인코딩·색상 자동 주입 | 완료 |
 | M3 | 로그 검색·필터, 준비·포트 감지, 포트 충돌 처리, 트레이·알림, 로그 파일 | 완료 |
 | M4 | 의존 순서 실행, 프리셋, 자동 재시작, 디버그 모드, 빠른 java 기동, VS Code 가져오기, 통합 로그, 공유 파일 | 완료 |
+| M5 | git 브랜치 표시·전환(실행 중인 서비스 자동 재시작)·밖에서 바꾼 브랜치 감지 | 완료 |
 
 자세한 범위와 완료 기준은 [기획서 9장](docs/PLANNING.md#9-마일스톤)에 있다.
 

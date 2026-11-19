@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::git;
 use crate::importers::{self, ScanContext, ScanResult};
 use crate::javamain;
 use crate::launch::{self, JavaClasspath, LaunchContext, LaunchPreview, LaunchSpec};
@@ -672,4 +673,125 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
         return Err("http(s) 주소만 열 수 있습니다.".into());
     }
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------- git 브랜치
+
+/// 서비스가 쓰는 git 저장소 하나
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRepo {
+    /// 작업 트리 루트
+    pub root: String,
+    /// 같은 경로의 워크스페이스 변수 이름, 없으면 폴더 이름
+    pub name: String,
+    pub branch: Option<String>,
+    /// detached HEAD일 때 짧은 커밋 해시
+    pub commit: Option<String>,
+    /// 이 저장소 안에서 실행하는 서비스
+    pub services: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchResult {
+    pub branch: String,
+    /// 전환하려고 중지한 서비스
+    pub stopped: Vec<String>,
+    pub restarted: bool,
+    /// 전환은 됐지만 pull·다시 시작에서 생긴 문제
+    pub warnings: Vec<String>,
+}
+
+impl AppCore {
+    /// 서비스 작업 디렉터리가 속한 git 저장소 (같은 저장소를 쓰는 서비스끼리 묶는다).
+    /// `.git/HEAD`만 읽으므로 자주 불러도 가볍다.
+    fn repos(&self) -> Result<Vec<GitRepo>, String> {
+        let ws = self.current()?;
+        let mut found: std::collections::HashMap<std::path::PathBuf, Option<git::RepoLocation>> = Default::default();
+        let mut out: Vec<(String, GitRepo)> = Vec::new();
+        for svc in &ws.services {
+            let Ok(cwd) = self.expanded_cwd(&ws, svc) else { continue };
+            let Some(loc) = found.entry(cwd.clone()).or_insert_with(|| git::find_repo(&cwd)).clone() else { continue };
+            let key = git::norm(&loc.root);
+            if let Some((_, r)) = out.iter_mut().find(|(k, _)| *k == key) {
+                r.services.push(svc.id.clone());
+                continue;
+            }
+            let head = git::read_head(&loc.git_dir);
+            let name = ws
+                .variables
+                .iter()
+                .find(|(_, v)| git::norm(std::path::Path::new(v.as_str())) == key)
+                .map(|(k, _)| k.clone())
+                .or_else(|| loc.root.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| git::display(&loc.root));
+            out.push((key, GitRepo { root: git::display(&loc.root), name, branch: head.branch, commit: head.commit, services: vec![svc.id.clone()] }));
+        }
+        Ok(out.into_iter().map(|(_, r)| r).collect())
+    }
+
+    /// 브랜치 전환: 변경 확인 → 이 저장소에서 실행 중인 서비스 중지 → 전환(→ pull) → 중지했던 서비스 다시 시작
+    fn switch_branch(self: &Arc<Self>, root: &str, target: &str, pull: bool, restart: bool) -> Result<SwitchResult, String> {
+        let repo_git = git::Git::open(std::path::Path::new(root))?;
+        // 서비스를 멈추기 전에 확인한다 (전환할 수 없는데 서비스만 내려가지 않도록)
+        repo_git.ensure_clean()?;
+        let key = git::norm(std::path::Path::new(root));
+        let repo = self.repos()?.into_iter().find(|r| git::norm(std::path::Path::new(&r.root)) == key);
+        let from = repo.as_ref().map(|r| r.branch.clone().or_else(|| r.commit.clone()).unwrap_or_default()).unwrap_or_default();
+        let ids: Vec<String> = repo
+            .map(|r| r.services)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| self.is_active(id) || self.manager.status(id).state == RunState::Waiting)
+            .collect();
+        for id in &ids {
+            self.logs.push(id, STREAM_SYS, format!("⎇ 브랜치 전환: {from} → {target}"));
+        }
+        self.manager.stop_many(&ids)?;
+        let branch = match repo_git.switch(target) {
+            Ok(b) => b,
+            Err(e) => {
+                // 전환하지 못했으면 내렸던 서비스를 원래 브랜치 그대로 다시 올린다
+                if restart && !ids.is_empty() {
+                    let _ = self.launch(ids.clone(), false, true);
+                }
+                return Err(e);
+            }
+        };
+        let mut warnings = Vec::new();
+        if pull {
+            if let Err(e) = repo_git.pull() {
+                warnings.push(format!("pull 실패: {e}"));
+            }
+        }
+        let restarted = restart && !ids.is_empty();
+        if restarted {
+            if let Err(e) = self.launch(ids.clone(), false, true) {
+                warnings.push(format!("다시 시작 실패: {e}"));
+            }
+        }
+        Ok(SwitchResult { branch, stopped: ids, restarted, warnings })
+    }
+}
+
+#[tauri::command]
+pub fn git_repos(core: Core) -> Result<Vec<GitRepo>, String> {
+    core.repos()
+}
+
+#[tauri::command]
+pub async fn git_branches(root: String) -> Result<git::BranchInfo, String> {
+    blocking(move || git::Git::open(std::path::Path::new(&root))?.branches()).await
+}
+
+#[tauri::command]
+pub async fn git_fetch(root: String) -> Result<(), String> {
+    blocking(move || git::Git::open(std::path::Path::new(&root))?.fetch()).await
+}
+
+#[tauri::command]
+pub async fn git_switch(core: Core<'_>, root: String, branch: String, pull: bool, restart: bool) -> Result<SwitchResult, String> {
+    let core = core.inner().clone();
+    blocking(move || core.switch_branch(&root, &branch, pull, restart)).await
 }

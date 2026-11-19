@@ -271,6 +271,9 @@
     <button class="tool" class:active={app.selection?.kind === 'import'} title="가져오기 (IntelliJ·package.json·Spring Boot)" onclick={() => app.select({ kind: 'import' })}>
       <Icon name="import" />
     </button>
+    <button class="tool" class:active={app.selection?.kind === 'branches'} title="브랜치 (git 브랜치 보기·전환)" onclick={() => app.openBranches()}>
+      <Icon name="branch" />
+    </button>
     <span class="sep"></span>
     <button class="tool stop" title="실행 중인 서비스 모두 중지" disabled={app.runningCount === 0} onclick={() => app.stopAll()}>
       <Icon name="stop-all" />

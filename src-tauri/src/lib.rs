@@ -1,4 +1,5 @@
 mod commands;
+mod git;
 mod importers;
 mod javamain;
 mod job;
@@ -119,6 +120,10 @@ pub fn run() {
             commands::logs_dir,
             commands::open_path,
             commands::open_url,
+            commands::git_repos,
+            commands::git_branches,
+            commands::git_fetch,
+            commands::git_switch,
         ])
         .build(tauri::generate_context!())
         .expect("Services Dashboard를 시작할 수 없습니다");

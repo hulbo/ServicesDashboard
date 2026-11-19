@@ -7,6 +7,10 @@
   {#each app.toasts as t (t.id)}
     <div class="toast {t.kind}" role={t.kind === 'error' ? 'alert' : 'status'}>
       <span class="text">{t.text}</span>
+      {#if t.action}
+        {@const action = t.action}
+        <button class="act" onclick={() => { action.run(); app.dismiss(t.id) }}>{action.label}</button>
+      {/if}
       <button title="닫기" onclick={() => app.dismiss(t.id)}><Icon name="x" size={12} /></button>
     </div>
   {/each}
@@ -46,6 +50,23 @@
   }
   .toast.info {
     border-left-color: var(--accent);
+  }
+  .act {
+    flex: none;
+    align-self: center;
+    padding: 3px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .act:hover {
+    background: var(--accent);
+    color: #fff;
   }
   .text {
     flex: 1;
