@@ -8,22 +8,55 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::model::{EnvMap, OutputEncoding, PackageManager, Service, ServiceKind, ShellKind, Workspace};
+use crate::runtime::{self, RuntimeInfo, RuntimeKind};
 use crate::vars::VarContext;
 
 /// Gradle init script가 읽는 환경변수 (JVM 옵션을 구분자로 이어 붙인 값)
 pub const JVM_ARGS_ENV: &str = "SD_JVM_ARGS";
 /// JVM 옵션 구분자 (ASCII Unit Separator)
 pub const JVM_ARGS_SEP: char = '\u{1F}';
+/// Gradle init script가 읽는 환경변수 (bootRun 메인 클래스)
+pub const MAIN_CLASS_ENV: &str = "SD_MAIN_CLASS";
+
+/// 한글 깨짐 방지용으로 Java에 넣는 콘솔 인코딩 옵션 (IntelliJ와 같은 방식)
+const UTF8_PROPS: [&str; 5] = ["file.encoding", "stdout.encoding", "stderr.encoding", "sun.stdout.encoding", "sun.stderr.encoding"];
+const SPRING_ANSI_ARG: &str = "--spring.output.ansi.enabled";
+
+/// 빌드 도구 JVM(Gradle·Maven)에도 UTF-8을 맞춘다. 앱 출력을 빌드 도구가 다시 인코딩해 중계하기 때문이다.
+fn add_build_tool_utf8(env: &mut EnvMap, var: &str) {
+    let mut opts = get_env(env, var).unwrap_or_default();
+    for prop in UTF8_PROPS {
+        let prefix = format!("-D{prop}=");
+        if !opts.contains(&prefix) {
+            if !opts.is_empty() {
+                opts.push(' ');
+            }
+            opts.push_str(&format!("{prefix}UTF-8"));
+        }
+    }
+    set_env(env, var, &opts);
+}
 
 /// `-I`로 넘기는 Gradle init script 내용
 pub const GRADLE_INIT_SCRIPT: &str = r#"// Services Dashboard가 생성한 파일입니다. 프로젝트 파일 수정 없이
-// JavaExec 태스크(bootRun, run 등)에 JVM 옵션을 주입합니다.
+// JavaExec 태스크(bootRun, run 등)에 JVM 옵션과 메인 클래스를 주입합니다.
 def sdJvmArgs = System.getenv('SD_JVM_ARGS')
+def sdMainClass = System.getenv('SD_MAIN_CLASS')
 if (sdJvmArgs) {
-    def parsed = sdJvmArgs.split('\u001F').findAll { it } as List
+    def parsed = sdJvmArgs.split('').findAll { it } as List
     allprojects {
-        tasks.withType(JavaExec).configureEach {
-            jvmArgs(parsed)
+        tasks.withType(JavaExec).configureEach { task -> task.jvmArgs(parsed) }
+    }
+}
+if (sdMainClass) {
+    // 빌드 스크립트의 설정이 모두 끝난 뒤(실행 직전)에 덮어써야 이긴다.
+    gradle.taskGraph.whenReady { graph ->
+        graph.allTasks.findAll { it.name == 'bootRun' && it instanceof JavaExec }.each { task ->
+            try {
+                task.mainClass.set(sdMainClass)
+            } catch (Throwable ignored) {
+                task.main = sdMainClass
+            }
         }
     }
 }
@@ -64,6 +97,8 @@ pub struct LaunchContext<'a> {
     pub workspace: &'a Workspace,
     pub workspace_dir: &'a Path,
     pub gradle_init_script: &'a Path,
+    /// 별칭(`17`, `node20` 등) 해석에 쓰는 감지된 런타임 목록
+    pub runtimes: &'a [RuntimeInfo],
 }
 
 pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
@@ -92,8 +127,15 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
 
     // 런타임: 이 프로세스에만 JAVA_HOME / PATH를 바꾼다
     let runtime = svc.runtime.as_ref();
-    let jdk = vars.expand_opt(runtime.and_then(|r| r.jdk.as_ref()))?;
-    let node_dir = vars.expand_opt(runtime.and_then(|r| r.node.as_ref()))?;
+    let resolve = |kind: RuntimeKind, value: Option<&String>| -> Result<Option<String>, String> {
+        match vars.expand_opt(value)? {
+            Some(v) => runtime::resolve(kind, &v, ctx.runtimes).map(Some),
+            None => Ok(None),
+        }
+    };
+    let jdk = resolve(RuntimeKind::Jdk, runtime.and_then(|r| r.jdk.as_ref()))?;
+    let node_dir = resolve(RuntimeKind::Node, runtime.and_then(|r| r.node.as_ref()))?;
+    let maven_home = resolve(RuntimeKind::Maven, runtime.and_then(|r| r.maven.as_ref()))?;
     if let Some(jdk) = &jdk {
         let bin = Path::new(jdk).join("bin");
         if !bin.is_dir() {
@@ -103,14 +145,36 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
         prepend_path(&mut env, &bin.to_string_lossy());
     }
     if let Some(node) = &node_dir {
-        if !Path::new(node).is_dir() {
-            return Err(format!("Node 경로가 없습니다: {node}"));
-        }
         prepend_path(&mut env, node);
     }
 
-    let args = vars.expand_all(&svc.args)?;
-    let jvm_args = vars.expand_all(&svc.jvm_args)?;
+    let mut args = vars.expand_all(&svc.args)?;
+    let mut jvm_args = vars.expand_all(&svc.jvm_args)?;
+    let main_class = vars.expand_opt(svc.main_class.as_ref())?;
+
+    // 자동 주입: 한글 깨짐 방지(Java), 컬러 로그(Node·Spring Boot·Maven). 사용자가 이미 지정한 값은 건드리지 않는다.
+    let java_kind = matches!(
+        svc.kind,
+        ServiceKind::GradleBoot | ServiceKind::MavenBoot | ServiceKind::Jar | ServiceKind::Gradle | ServiceKind::JavaMain
+    );
+    if svc.inject_utf8() && java_kind {
+        for prop in UTF8_PROPS {
+            let prefix = format!("-D{prop}=");
+            if !jvm_args.iter().any(|a| a.starts_with(&prefix)) {
+                jvm_args.push(format!("{prefix}UTF-8"));
+            }
+        }
+    }
+    let color = svc.inject_color();
+    if color && matches!(svc.kind, ServiceKind::Npm | ServiceKind::Node) && get_env(&env, "FORCE_COLOR").is_none() {
+        set_env(&mut env, "FORCE_COLOR", "1");
+    }
+    if color
+        && matches!(svc.kind, ServiceKind::GradleBoot | ServiceKind::MavenBoot)
+        && !args.iter().any(|a| a.starts_with(SPRING_ANSI_ARG))
+    {
+        args.push(format!("{SPRING_ANSI_ARG}=always"));
+    }
     let profiles: Vec<String> = svc
         .spring
         .as_ref()
@@ -157,11 +221,24 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
             let g = svc.gradle.clone().unwrap_or_default();
             let project = vars.expand_opt(g.project.as_ref())?;
             let mut a = vec!["--console=plain".to_string()];
+            // 데몬을 쓰지 않으면 빌드 JVM과 앱이 모두 이 서비스의 Job 안에 들어가 중지 즉시 함께 종료된다.
+            if !g.daemon.unwrap_or(false) && !g.options.iter().any(|o| o == "--daemon" || o == "--no-daemon") {
+                a.push("--no-daemon".into());
+            }
+            if svc.inject_utf8() {
+                add_build_tool_utf8(&mut env, "GRADLE_OPTS");
+            }
             a.extend(vars.expand_all(&g.options)?);
-            if !jvm_args.is_empty() {
+            let boot_main = main_class.as_ref().filter(|_| svc.kind == ServiceKind::GradleBoot);
+            if !jvm_args.is_empty() || boot_main.is_some() {
                 a.push("-I".into());
                 a.push(ctx.gradle_init_script.to_string_lossy().into_owned());
+            }
+            if !jvm_args.is_empty() {
                 set_env(&mut env, JVM_ARGS_ENV, &jvm_args.join(&JVM_ARGS_SEP.to_string()));
+            }
+            if let Some(mc) = boot_main {
+                set_env(&mut env, MAIN_CLASS_ENV, mc);
             }
             let tasks: Vec<String> = if svc.kind == ServiceKind::GradleBoot {
                 vec!["bootRun".into()]
@@ -185,12 +262,21 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
         ServiceKind::MavenBoot | ServiceKind::Maven => {
             let m = svc.maven.clone().unwrap_or_default();
             let mut a = vars.expand_all(&m.options)?;
+            if svc.inject_utf8() {
+                add_build_tool_utf8(&mut env, "MAVEN_OPTS");
+            }
+            if color && !a.iter().any(|o| o.starts_with("-Dstyle.color")) {
+                a.push("-Dstyle.color=always".into());
+            }
             if let Some(module) = vars.expand_opt(m.module.as_ref())? {
                 a.push("-pl".into());
                 a.push(module);
             }
             if svc.kind == ServiceKind::MavenBoot {
                 a.push("spring-boot:run".into());
+                if let Some(mc) = &main_class {
+                    a.push(format!("-Dspring-boot.run.main-class={mc}"));
+                }
                 if !profiles.is_empty() {
                     a.push(format!("-Dspring-boot.run.profiles={}", profiles.join(",")));
                 }
@@ -207,7 +293,7 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
                 }
                 a.extend(goals.into_iter().filter(|g| !g.trim().is_empty()));
             }
-            (maven_program(&cwd), a)
+            (maven_program(&cwd, maven_home.as_deref()), a)
         }
         ServiceKind::Jar => {
             let jar = svc.jar.clone().unwrap_or_default();
@@ -365,7 +451,13 @@ fn gradle_program(cwd: &Path) -> String {
     }
 }
 
-fn maven_program(cwd: &Path) -> String {
+fn maven_program(cwd: &Path, maven_home: Option<&str>) -> String {
+    if let Some(home) = maven_home {
+        let mvn = Path::new(home).join("bin").join(if cfg!(windows) { "mvn.cmd" } else { "mvn" });
+        if mvn.is_file() {
+            return mvn.to_string_lossy().into_owned();
+        }
+    }
     let wrapper = if cfg!(windows) { "mvnw.cmd" } else { "mvnw" };
     match find_upward(cwd, wrapper, 4) {
         Some(p) => p.to_string_lossy().into_owned(),
@@ -461,6 +553,7 @@ mod tests {
         dir: tempfile::TempDir,
         ws: Workspace,
         init: PathBuf,
+        runtimes: Vec<RuntimeInfo>,
     }
 
     impl Fixture {
@@ -476,14 +569,19 @@ mod tests {
                 ..Default::default()
             });
             let init = dir.path().join("init.gradle");
-            Fixture { dir, ws, init }
+            Fixture { dir, ws, init, runtimes: Vec::new() }
         }
         fn path(&self) -> &Path {
             self.dir.path()
         }
         fn build(&self, svc: &Service) -> Result<LaunchSpec, String> {
             build(
-                &LaunchContext { workspace: &self.ws, workspace_dir: self.path(), gradle_init_script: &self.init },
+                &LaunchContext {
+                    workspace: &self.ws,
+                    workspace_dir: self.path(),
+                    gradle_init_script: &self.init,
+                    runtimes: &self.runtimes,
+                },
                 svc,
             )
         }
@@ -491,6 +589,11 @@ mod tests {
 
     fn svc(kind: ServiceKind) -> Service {
         Service { id: "s".into(), name: "s".into(), kind, cwd: Some("${var:ROOT}".into()), ..Default::default() }
+    }
+
+    fn no_inject(mut s: Service) -> Service {
+        s.inject = Some(InjectOpts { utf8: Some(false), color: Some(false), ..Default::default() });
+        s
     }
 
     #[test]
@@ -504,6 +607,21 @@ mod tests {
         assert!(spec.program.starts_with("npm"));
         assert_eq!(spec.args, vec!["run", "dev", "--", "--port", "5174"]);
         assert_eq!(spec.env.get("COMMON").unwrap(), "1");
+        // 파이프로 실행해도 색상이 나오도록 FORCE_COLOR를 넣는다
+        assert_eq!(spec.env.get("FORCE_COLOR").unwrap(), "1");
+    }
+
+    #[test]
+    fn color_injection_respects_user_value_and_switch() {
+        let f = Fixture::new();
+        fs::write(f.path().join("package.json"), "{}").unwrap();
+        let mut s = svc(ServiceKind::Npm);
+        s.npm = Some(NpmOpts { script: "dev".into(), ..Default::default() });
+        s.env.insert("FORCE_COLOR".into(), "0".into());
+        assert_eq!(f.build(&s).unwrap().env.get("FORCE_COLOR").unwrap(), "0");
+        s.env.clear();
+        let s = no_inject(s);
+        assert!(!f.build(&s).unwrap().env.contains_key("FORCE_COLOR"));
     }
 
     #[test]
@@ -529,12 +647,18 @@ mod tests {
         assert!(spec.program.ends_with(wrapper));
         assert!(spec.args.contains(&":apps:portal:bootRun".to_string()));
         assert!(spec.args.contains(&"-I".to_string()));
+        assert!(spec.args.contains(&"--no-daemon".to_string()), "기본은 데몬 없이 실행");
+        let gradle_opts = spec.env.get("GRADLE_OPTS").unwrap();
+        assert!(gradle_opts.contains("-Dfile.encoding=UTF-8") && gradle_opts.contains("-Dsun.stdout.encoding=UTF-8"));
         assert_eq!(
             spec.args.last().unwrap(),
-            "--args=--spring.profiles.active=local,db --server.port=8081 \"--app.title=My App\""
+            "--args=--spring.profiles.active=local,db --server.port=8081 \"--app.title=My App\" --spring.output.ansi.enabled=always"
         );
-        let jvm = spec.env.get(JVM_ARGS_ENV).unwrap();
-        assert_eq!(jvm.split(JVM_ARGS_SEP).count(), 3);
+        let jvm: Vec<&str> = spec.env.get(JVM_ARGS_ENV).unwrap().split(JVM_ARGS_SEP).collect();
+        // 사용자 옵션 3개 + 인코딩 옵션 4개 (file.encoding은 사용자가 이미 지정해 중복하지 않음)
+        assert_eq!(jvm.len(), 7, "{jvm:?}");
+        assert_eq!(jvm.iter().filter(|a| a.starts_with("-Dfile.encoding=")).count(), 1);
+        assert!(jvm.contains(&"-Dstdout.encoding=UTF-8") && jvm.contains(&"-Dsun.stdout.encoding=UTF-8"));
         // 그룹 환경변수가 적용된다
         assert_eq!(spec.env.get("SPRING_PROFILES_ACTIVE").unwrap(), "group");
     }
@@ -542,7 +666,7 @@ mod tests {
     #[test]
     fn gradle_boot_without_jvm_args_skips_init_script() {
         let f = Fixture::new();
-        let mut s = svc(ServiceKind::GradleBoot);
+        let mut s = no_inject(svc(ServiceKind::GradleBoot));
         s.gradle = Some(GradleOpts::default());
         let spec = f.build(&s).unwrap();
         assert!(!spec.args.contains(&"-I".to_string()));
@@ -551,10 +675,37 @@ mod tests {
     }
 
     #[test]
+    fn gradle_daemon_opt_in_and_user_opts_kept() {
+        let f = Fixture::new();
+        let mut s = svc(ServiceKind::GradleBoot);
+        s.gradle = Some(GradleOpts { daemon: Some(true), ..Default::default() });
+        s.env.insert("GRADLE_OPTS".into(), "-Xmx2g -Dfile.encoding=MS949".into());
+        let spec = f.build(&s).unwrap();
+        assert!(!spec.args.contains(&"--no-daemon".to_string()));
+        let opts = spec.env.get("GRADLE_OPTS").unwrap();
+        assert!(opts.starts_with("-Xmx2g -Dfile.encoding=MS949"), "사용자 값 유지: {opts}");
+        assert_eq!(opts.matches("-Dfile.encoding=").count(), 1);
+        assert!(opts.contains("-Dstdout.encoding=UTF-8"));
+    }
+
+    #[test]
+    fn gradle_boot_main_class_uses_init_script() {
+        let f = Fixture::new();
+        let mut s = no_inject(svc(ServiceKind::GradleBoot));
+        s.gradle = Some(GradleOpts { project: Some(":apps:api".into()), ..Default::default() });
+        s.main_class = Some("com.example.api.ApiApplication".into());
+        let spec = f.build(&s).unwrap();
+        assert!(spec.args.contains(&"-I".to_string()));
+        assert_eq!(spec.env.get(MAIN_CLASS_ENV).unwrap(), "com.example.api.ApiApplication");
+        assert!(!spec.env.contains_key(JVM_ARGS_ENV));
+    }
+
+    #[test]
     fn maven_boot_properties() {
         let f = Fixture::new();
-        let mut s = svc(ServiceKind::MavenBoot);
+        let mut s = no_inject(svc(ServiceKind::MavenBoot));
         s.maven = Some(MavenOpts { module: Some("portal".into()), ..Default::default() });
+        s.main_class = Some("com.example.PortalApplication".into());
         s.spring = Some(SpringOpts { profiles: vec!["local".into()], ..Default::default() });
         s.jvm_args = vec!["-Xmx512m".into()];
         s.args = vec!["--server.port=8080".into()];
@@ -565,11 +716,51 @@ mod tests {
                 "-pl",
                 "portal",
                 "spring-boot:run",
+                "-Dspring-boot.run.main-class=com.example.PortalApplication",
                 "-Dspring-boot.run.profiles=local",
                 "-Dspring-boot.run.jvmArguments=-Xmx512m",
                 "-Dspring-boot.run.arguments=--server.port=8080",
             ]
         );
+    }
+
+    #[test]
+    fn maven_boot_injection() {
+        let f = Fixture::new();
+        let mut s = svc(ServiceKind::MavenBoot);
+        s.maven = Some(MavenOpts::default());
+        let spec = f.build(&s).unwrap();
+        assert_eq!(spec.args[0], "-Dstyle.color=always");
+        assert!(spec.env.get("MAVEN_OPTS").unwrap().contains("-Dfile.encoding=UTF-8"));
+        let jvm = spec.args.iter().find(|a| a.starts_with("-Dspring-boot.run.jvmArguments=")).unwrap();
+        assert!(jvm.contains("-Dfile.encoding=UTF-8") && jvm.contains("-Dsun.stderr.encoding=UTF-8"));
+        assert_eq!(spec.args.last().unwrap(), "-Dspring-boot.run.arguments=--spring.output.ansi.enabled=always");
+    }
+
+    #[test]
+    fn runtime_alias_and_maven_home() {
+        let mut f = Fixture::new();
+        let jdk = f.path().join("jdks/jdk-17.0.15");
+        fs::create_dir_all(jdk.join("bin")).unwrap();
+        let mvn = f.path().join("maven");
+        let mvn_exe = mvn.join("bin").join(if cfg!(windows) { "mvn.cmd" } else { "mvn" });
+        fs::create_dir_all(mvn_exe.parent().unwrap()).unwrap();
+        fs::write(&mvn_exe, "").unwrap();
+        f.runtimes = vec![RuntimeInfo {
+            kind: RuntimeKind::Jdk,
+            path: runtime::to_slash(&jdk),
+            version: "17.0.15".into(),
+            major: "17".into(),
+            vendor: None,
+            source: "test".into(),
+        }];
+        let mut s = no_inject(svc(ServiceKind::MavenBoot));
+        s.runtime = Some(RuntimeOpts { jdk: Some("17".into()), maven: Some(runtime::to_slash(&mvn)), ..Default::default() });
+        let spec = f.build(&s).unwrap();
+        assert_eq!(spec.env.get("JAVA_HOME").unwrap(), &runtime::to_slash(&jdk));
+        assert_eq!(PathBuf::from(&spec.program), mvn_exe);
+        s.runtime = Some(RuntimeOpts { jdk: Some("21".into()), ..Default::default() });
+        assert!(f.build(&s).unwrap_err().contains("21"));
     }
 
     #[test]
@@ -587,7 +778,11 @@ mod tests {
         let spec = f.build(&s).unwrap();
         assert_eq!(PathBuf::from(&spec.program), java);
         assert_eq!(spec.args[0], "-Xmx256m");
-        assert_eq!(spec.args[1], "-jar");
+        let jar_at = spec.args.iter().position(|a| a == "-jar").unwrap();
+        // 인코딩 옵션은 -jar 앞(VM 옵션 자리)에 들어간다
+        assert!(spec.args[..jar_at].contains(&"-Dfile.encoding=UTF-8".to_string()));
+        // jar는 Spring Boot라는 보장이 없어 색상 인자를 넣지 않는다
+        assert!(!spec.args.iter().any(|a| a.starts_with("--spring.output")));
         assert_eq!(spec.env.get("JAVA_HOME").unwrap(), &jdk.to_string_lossy().into_owned());
         assert!(spec.env.get("PATH").unwrap().starts_with(&*jdk.join("bin").to_string_lossy()));
     }

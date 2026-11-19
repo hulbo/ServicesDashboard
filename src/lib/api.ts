@@ -6,6 +6,8 @@ import type {
   LaunchPreview,
   LogBatch,
   LogLine,
+  RuntimeInfo,
+  ScanResult,
   Service,
   ServiceStatus,
   StartError,
@@ -29,6 +31,8 @@ export interface Backend {
   getLogs(id: string): Promise<LogLine[]>
   clearLogs(id: string): Promise<void>
   preview(service: Service): Promise<LaunchPreview>
+  scanProject(root: string): Promise<ScanResult>
+  detectRuntimes(refresh: boolean): Promise<RuntimeInfo[]>
   openPath(path: string): Promise<void>
   openUrl(url: string): Promise<void>
   pickFolder(defaultPath?: string): Promise<string | null>
@@ -73,6 +77,8 @@ async function createTauriBackend(): Promise<Backend> {
     getLogs: (id) => call('logs_get', { id }),
     clearLogs: (id) => call('logs_clear', { id }),
     preview: (service) => call('launch_preview', { service }),
+    scanProject: (root) => call('project_scan', { root }),
+    detectRuntimes: (refresh) => call('runtimes_detect', { refresh }),
     openPath: (path) => call('open_path', { path }),
     openUrl: (url) => call('open_url', { url }),
     async pickFolder(defaultPath) {

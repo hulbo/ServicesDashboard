@@ -3,7 +3,7 @@
 
 import type { Backend } from './api'
 import { joinArgs } from './args'
-import type { LogBatch, LogLine, Service, ServiceStatus, Workspace } from './types'
+import type { Candidate, LogBatch, LogLine, RuntimeInfo, ScanResult, Service, ServiceStatus, Workspace } from './types'
 import { STREAM_ERR, STREAM_OUT, STREAM_SYS } from './types'
 
 const sample: Workspace = {
@@ -68,6 +68,111 @@ function bootLog(level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG', logger: string, msg
   const color = { INFO: 32, WARN: 33, ERROR: 31, DEBUG: 36 }[level]
   const ts = new Date().toISOString().replace('Z', '+09:00')
   return `\x1b[2m${ts}\x1b[0;39m \x1b[${color}m${level.padStart(5)}\x1b[0;39m \x1b[35m12345\x1b[0;39m \x1b[2m---\x1b[0;39m \x1b[2m[portal] [  restartedMain]\x1b[0;39m \x1b[36m${logger.padEnd(40)}\x1b[0;39m \x1b[2m:\x1b[0;39m ${msg}`
+}
+
+const mockRuntimes: RuntimeInfo[] = [
+  { kind: 'jdk', path: 'C:/Program Files/Java/jdk-17.0.15', version: '17.0.15', major: '17', vendor: 'Oracle Corporation', source: 'JAVA_HOME' },
+  { kind: 'jdk', path: 'C:/Program Files/Eclipse Adoptium/jdk-21.0.2.13-hotspot', version: '21.0.2', major: '21', vendor: 'Eclipse Adoptium', source: '설치됨' },
+  { kind: 'jdk', path: 'C:/Program Files/Java/jdk1.8.0_202', version: '1.8.0_202', major: '8', vendor: null, source: '설치됨' },
+  { kind: 'node', path: 'C:/Program Files/nodejs', version: '22.11.0', major: '22', vendor: null, source: 'PATH' },
+  { kind: 'node', path: 'C:/nvm/v20.11.1', version: '20.11.1', major: '20', vendor: null, source: 'nvm' },
+  { kind: 'maven', path: 'C:/tools/apache-maven-3.9.6', version: '3.9.6', major: '3', vendor: null, source: 'MAVEN_HOME' },
+]
+
+function mockScan(root: string): ScanResult {
+  const r = root.replace(/\\/g, '/').replace(/\/+$/, '')
+  const mk = (
+    key: string,
+    source: Candidate['source'],
+    origin: string,
+    group: string | null,
+    service: Partial<Service>,
+    extra: Partial<Candidate> = {},
+  ): Candidate => ({
+    key,
+    source,
+    origin,
+    group,
+    service: { id: key, name: 'svc', type: 'npm', source: { kind: source, root: r, key, origin }, ...service } as Service,
+    scripts: [],
+    profiles: [],
+    warnings: [],
+    recommended: source === 'intellij',
+    command: null,
+    commandError: null,
+    ...extra,
+  })
+  return {
+    root: r,
+    suggestedVar: (r.split('/').pop() || 'ROOT').toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
+    warnings: ['가져오지 않은 IntelliJ 구성: all (복합 구성은 M4 실행 프리셋에서 지원 예정)'],
+    candidates: [
+      mk(
+        'intellij:.idea/workspace.xml#PortalApplication',
+        'intellij',
+        '.idea/workspace.xml',
+        'server',
+        {
+          name: 'PortalApplication',
+          type: 'gradle-boot',
+          cwd: r,
+          gradle: { project: ':apps:portal' },
+          mainClass: 'com.example.portal.PortalApplication',
+          spring: { profiles: ['local'] },
+          runtime: { jdk: 'C:/Program Files/Java/jdk-17.0.15' },
+          ports: [8080],
+        },
+        { command: 'gradlew.bat --console=plain -I sd-init.gradle :apps:portal:bootRun "--args=--spring.profiles.active=local --spring.output.ansi.enabled=always"' },
+      ),
+      mk(
+        'intellij:.run/api-qa.run.xml#api-qa',
+        'intellij',
+        '.run/api-qa.run.xml',
+        null,
+        { name: 'api-qa', type: 'gradle-boot', cwd: r, gradle: { project: ':apps:api' }, args: ['--spring.profiles.active=qa'] },
+        { command: 'gradlew.bat --console=plain :apps:api:bootRun "--args=--spring.profiles.active=qa"' },
+      ),
+      mk(
+        'intellij:.run/npm-portal.run.xml#portal',
+        'intellij',
+        '.run/npm-portal.run.xml',
+        'npm',
+        { name: 'portal', type: 'npm', cwd: `${r}/front/portal`, npm: { script: 'dev' }, ports: [5173] },
+        { command: 'npm.cmd run dev', scripts: ['build', 'dev', 'lint'] },
+      ),
+      mk(
+        'intellij:.run/legacy.run.xml#legacy',
+        'intellij',
+        '.run/legacy.run.xml',
+        null,
+        { name: 'legacy-jar', type: 'jar', cwd: r, jar: { path: `${r}/dist/legacy.jar` } },
+        { commandError: `jar 파일이 없습니다: ${r}/dist/legacy.jar`, warnings: ["대체 JRE '1.6'을(를) 찾지 못해 프로젝트 SDK를 씁니다."] },
+      ),
+      mk(
+        'npm:front/admin',
+        'npm',
+        'front/admin/package.json',
+        'npm',
+        { name: 'admin-ui', type: 'npm', cwd: `${r}/front/admin`, npm: { script: 'serve', packageManager: 'yarn' } },
+        { command: 'yarn.cmd serve', scripts: ['lint', 'serve'], recommended: false },
+      ),
+      mk(
+        'gradle::apps:batch#com.example.batch.BatchApplication',
+        'gradle',
+        'Gradle :apps:batch',
+        'server',
+        {
+          name: 'BatchApplication',
+          type: 'gradle-boot',
+          cwd: r,
+          gradle: { project: ':apps:batch' },
+          mainClass: 'com.example.batch.BatchApplication',
+          spring: { profiles: ['local'] },
+        },
+        { command: 'gradlew.bat --console=plain :apps:batch:bootRun', profiles: ['local', 'prod'], recommended: false },
+      ),
+    ],
+  }
 }
 
 export function createMockBackend(): Backend {
@@ -231,6 +336,15 @@ export function createMockBackend(): Backend {
       logs.set(id, [])
     },
     preview: async (svc) => ({ command: fakeCommand(svc), cwd: (svc.cwd ?? '~').replace('${var:ROOT}', 'C:/Project/sample'), env: svc.env ?? {} }),
+    scanProject: async (root) => {
+      await new Promise((r) => setTimeout(r, 300))
+      if (!root.trim()) throw new Error('폴더를 입력하세요.')
+      return mockScan(root)
+    },
+    detectRuntimes: async () => {
+      await new Promise((r) => setTimeout(r, 200))
+      return mockRuntimes
+    },
     openPath: async (p) => console.info('[미리보기] 열기:', p),
     openUrl: async (u) => {
       window.open(u, '_blank')

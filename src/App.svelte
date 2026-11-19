@@ -6,6 +6,8 @@
   import ServiceDetail from './lib/components/ServiceDetail.svelte'
   import GroupDetail from './lib/components/GroupDetail.svelte'
   import WorkspaceSettings from './lib/components/WorkspaceSettings.svelte'
+  import ImportPanel from './lib/components/ImportPanel.svelte'
+  import RuntimesPanel from './lib/components/RuntimesPanel.svelte'
   import Toasts from './lib/components/Toasts.svelte'
 
   let initError = $state<string | null>(null)
@@ -94,12 +96,17 @@
         {/key}
       {:else if app.selection?.kind === 'workspace'}
         <WorkspaceSettings />
+      {:else if app.selection?.kind === 'import'}
+        <ImportPanel />
+      {:else if app.selection?.kind === 'runtimes'}
+        <RuntimesPanel />
       {:else}
         <div class="center">
           <h2>Services Dashboard</h2>
           <p class="muted">왼쪽에서 서비스를 선택하거나 새로 추가하세요.</p>
           <div class="row">
-            <button class="btn primary" onclick={() => app.addService()}><Icon name="plus" size={14} /> 서비스 추가</button>
+            <button class="btn primary" onclick={() => app.select({ kind: 'import' })}><Icon name="import" size={14} /> 프로젝트에서 가져오기</button>
+            <button class="btn" onclick={() => app.addService()}><Icon name="plus" size={14} /> 서비스 추가</button>
             <button class="btn" onclick={() => app.addGroup()}><Icon name="folder-plus" size={14} /> 그룹 추가</button>
             <button class="btn" onclick={() => app.select({ kind: 'workspace' })}><Icon name="workspace" size={14} /> 워크스페이스 설정</button>
           </div>

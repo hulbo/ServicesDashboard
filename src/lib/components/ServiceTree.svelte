@@ -81,6 +81,9 @@
         { label: '복제', icon: 'copy', action: () => app.duplicateService(svc.id) },
         'separator',
         { label: '작업 디렉터리 열기', icon: 'folder', action: () => openCwd(svc) },
+        ...(svc.source?.key
+          ? ([{ label: '원본에서 다시 가져오기', icon: 'refresh', action: () => app.resync(svc.id) }] as MenuEntry[])
+          : []),
         'separator',
         { label: '삭제', icon: 'trash', shortcut: 'Delete', danger: true, action: () => app.deleteService(svc.id) },
       ],
@@ -115,6 +118,7 @@
       items: [
         { label: '서비스 추가', icon: 'plus', action: () => app.addService() },
         { label: '그룹 추가', icon: 'folder-plus', action: () => app.addGroup() },
+        { label: '가져오기…', icon: 'import', action: () => app.select({ kind: 'import' }) },
       ],
     }
   }
@@ -123,7 +127,7 @@
 
   function currentIndex() {
     const sel = app.selection
-    if (!sel || sel.kind === 'workspace') return -1
+    if (!sel || !('id' in sel)) return -1
     return flat.findIndex((n) => (n.kind === 'group' ? sel.kind === 'group' && n.group.id === sel.id : sel.kind === 'service' && n.service.id === sel.id))
   }
 
@@ -225,11 +229,17 @@
       <Icon name="plus" />
     </button>
     <button class="tool" title="그룹 추가" onclick={() => app.addGroup()}><Icon name="folder-plus" /></button>
+    <button class="tool" class:active={app.selection?.kind === 'import'} title="가져오기 (IntelliJ·package.json·Spring Boot)" onclick={() => app.select({ kind: 'import' })}>
+      <Icon name="import" />
+    </button>
     <span class="sep"></span>
     <button class="tool stop" title="실행 중인 서비스 모두 중지" disabled={app.runningCount === 0} onclick={() => app.stopAll()}>
       <Icon name="stop-all" />
     </button>
     <span class="spacer"></span>
+    <button class="tool" class:active={app.selection?.kind === 'runtimes'} title="런타임 (JDK·Node·Maven)" onclick={() => app.select({ kind: 'runtimes' })}>
+      <Icon name="runtime" />
+    </button>
     <button class="tool" class:active={app.selection?.kind === 'workspace'} title="워크스페이스 설정 (변수·공통 환경변수)" onclick={() => app.select({ kind: 'workspace' })}>
       <Icon name="workspace" />
     </button>
@@ -312,7 +322,8 @@
     {#if app.workspace.services.length === 0 && app.workspace.groups.length === 0}
       <div class="hint">
         <p>등록된 서비스가 없습니다.</p>
-        <button class="primary" onclick={() => app.addService()}><Icon name="plus" size={14} /> 서비스 추가</button>
+        <button class="primary" onclick={() => app.select({ kind: 'import' })}><Icon name="import" size={14} /> 프로젝트에서 가져오기</button>
+        <button class="secondary" onclick={() => app.addService()}><Icon name="plus" size={14} /> 직접 추가</button>
       </div>
     {:else if query && tree.groups.length === 0 && tree.ungrouped.length === 0}
       <div class="hint"><p>'{filter}'와 일치하는 서비스가 없습니다.</p></div>
@@ -588,5 +599,18 @@
   }
   .hint p {
     margin: 0 0 12px;
+  }
+  .hint .secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    margin-top: 6px;
+    padding: 0 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
   }
 </style>

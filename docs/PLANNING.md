@@ -1,6 +1,6 @@
 # Services Dashboard 기획서
 
-> 문서 버전 0.2 · 2026-11-19 · 진행 상황: M0·M1 완료, M2 예정
+> 문서 버전 0.3 · 2026-11-19 · 진행 상황: M0·M1·M2 완료, M3 예정
 
 IntelliJ를 켜지 않고도 로컬 개발 서비스(Node, Spring Boot, Maven, Gradle, 임의 명령)를 한 화면에서 띄우고, 끄고, 로그를 보는 **가벼운 데스크톱 서비스 대시보드**.
 
@@ -429,9 +429,9 @@ ServicesDashboard/
 
 | 단계 | 범위 | 완료 기준 | 상태 |
 |---|---|---|---|
-| **M0 기반** | Tauri 2 + Svelte 프로젝트 구성, CI(Windows 빌드), 워크스페이스 JSON Schema | 빈 창이 뜨는 설치본이 Actions에서 빌드됨 | 구현 완료 (CI는 푸시 후 확인) |
+| **M0 기반** | Tauri 2 + Svelte 프로젝트 구성, CI(Windows 빌드), 워크스페이스 JSON Schema | 빈 창이 뜨는 설치본이 Actions에서 빌드됨 | 완료 |
 | **M1 MVP** | 좌측 트리 + 우측 콘솔, 서비스 추가/편집 폼, `npm` · `shell` · `gradle-boot` · `maven-boot` · `jar` 실행, 시작/중지/재시작, Job Object 트리 종료, ANSI 콘솔, 설정 저장 | **IntelliJ 없이 기존 서비스를 모두 띄우고 로그를 볼 수 있음** | 완료 |
-| **M2 가져오기·런타임** | IntelliJ 실행 구성 가져오기, package.json·Spring Boot 스캔, JDK/Node/Maven 감지와 서비스별 지정, 인코딩·색상 자동 주입 | 프로젝트 폴더 선택 한 번으로 서비스 목록 구성 | 예정 |
+| **M2 가져오기·런타임** | IntelliJ 실행 구성 가져오기, package.json·Spring Boot 스캔, JDK/Node/Maven 감지와 서비스별 지정, 인코딩·색상 자동 주입 | 프로젝트 폴더 선택 한 번으로 서비스 목록 구성 | 완료 |
 | **M3 로그·운영 편의** | 검색·필터·레벨 필터·스택트레이스 접기, 준비 감지, 포트 감지와 브라우저 열기, 포트 충돌 처리, 트레이·알림, 로그 파일 | 하루 종일 켜 두고 쓸 수 있는 수준 | 예정 |
 | **M4 고급** | 의존성 순서 실행, 실행 프리셋, 자동 재시작, 디버그 모드, `java-main` 빠른 기동, VS Code 가져오기, 통합 로그 뷰, 프로젝트 공유 파일 | IntelliJ Services 탭을 완전히 대체 | 예정 |
 
@@ -446,7 +446,9 @@ ServicesDashboard/
 | 파이프 실행 시 도구가 색상을 끄거나 출력을 버퍼링 | `FORCE_COLOR` 등 주입. 2차로 ConPTY(의사 터미널) 실행 모드 추가 |
 | 대량 로그로 UI 부하 | 50ms 배치 전송 + 가상 스크롤 + 링 버퍼 상한 |
 | 일부 Windows 10에 WebView2 미설치 | 설치본에 WebView2 부트스트래퍼 포함 |
-| Gradle 데몬 기동 시간 | Wrapper와 데몬 재사용. 반복 실행이 잦은 서비스는 `java-main` 권장 |
+| Gradle 데몬 기동 시간 | 기본은 `--no-daemon`(중지 시 앱까지 즉시 종료 보장). 서비스별로 데몬 재사용을 켤 수 있음. 반복 실행이 잦은 서비스는 `java-main`(M4) 권장 |
+| 빌드 도구가 앱 출력을 재인코딩 (한글 깨짐) | Gradle·Maven JVM에도 `GRADLE_OPTS`·`MAVEN_OPTS`로 UTF-8 옵션을 넣어 앱·빌드 도구·대시보드의 인코딩을 맞춤 (M2에서 확인) |
+| 외부(IntelliJ) Gradle 데몬에 붙으면 앱이 대시보드 Job 밖에서 실행됨 | `--no-daemon` 기본값으로 해결. 데몬 재사용 옵션에는 지연 가능성을 안내 |
 
 ## 11. 부록
 

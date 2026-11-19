@@ -1,9 +1,11 @@
 mod commands;
+mod importers;
 mod job;
 mod launch;
 mod logs;
 mod model;
 mod process;
+mod runtime;
 mod store;
 mod vars;
 
@@ -31,7 +33,20 @@ pub fn run() {
             let sink: Arc<dyn EventSink> = Arc::new(TauriSink(app.handle().clone()));
             let manager = ProcessManager::new(logs.clone(), sink.clone());
             let workspace = store.load();
-            app.manage(Arc::new(AppCore { store, workspace: Mutex::new(workspace), manager, logs: logs.clone() }));
+            let core = Arc::new(AppCore {
+                store,
+                workspace: Mutex::new(workspace),
+                manager,
+                logs: logs.clone(),
+                runtimes: Mutex::new(None),
+                detect_env: runtime::DetectEnv::from_system(),
+            });
+            app.manage(core.clone());
+
+            // 런타임 감지는 수백 ms~수 초 걸릴 수 있어 미리 해 둔다.
+            std::thread::Builder::new().name("runtime-detect".into()).spawn(move || {
+                core.runtimes(false);
+            })?;
 
             std::thread::Builder::new().name("log-flush".into()).spawn(move || {
                 loop {
@@ -59,6 +74,8 @@ pub fn run() {
             commands::logs_get,
             commands::logs_clear,
             commands::launch_preview,
+            commands::runtimes_detect,
+            commands::project_scan,
             commands::open_path,
             commands::open_url,
         ])

@@ -86,8 +86,14 @@ pub struct Service {
     pub jvm_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// 실행할 메인 클래스 (gradle-boot는 init script, maven-boot는 -Dspring-boot.run.main-class로 전달)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_class: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeOpts>,
+    /// 한글 깨짐 방지·컬러 로그 옵션 자동 추가 여부 (기본: 모두 켬)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject: Option<InjectOpts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spring: Option<SpringOpts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,14 +125,39 @@ fn is_default_encoding(e: &OutputEncoding) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeOpts {
-    /// JDK 홈 디렉터리 (JAVA_HOME으로 쓰인다)
+    /// JDK 홈 디렉터리 또는 별칭 (예: `17`, `1.8`). JAVA_HOME으로 쓰인다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jdk: Option<String>,
-    /// node.exe가 들어 있는 디렉터리
+    /// node.exe가 들어 있는 디렉터리 또는 별칭 (예: `20`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    /// Maven 홈 디렉터리 또는 별칭. Maven Wrapper(mvnw)보다 우선한다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maven: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InjectOpts {
+    /// Java: -Dfile.encoding=UTF-8 등 콘솔 인코딩 옵션 추가
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utf8: Option<bool>,
+    /// Node: FORCE_COLOR=1, Spring Boot: --spring.output.ansi.enabled=always, Maven: -Dstyle.color=always
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<bool>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Service {
+    pub fn inject_utf8(&self) -> bool {
+        self.inject.as_ref().and_then(|i| i.utf8).unwrap_or(true)
+    }
+    pub fn inject_color(&self) -> bool {
+        self.inject.as_ref().and_then(|i| i.color).unwrap_or(true)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -181,6 +212,10 @@ pub struct GradleOpts {
     /// 추가 Gradle 옵션 (예: `--offline`)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    /// Gradle 데몬 재사용 (기본: 끔 → `--no-daemon`).
+    /// 켜면 빠르지만, 다른 곳(IntelliJ 등)에서 띄운 데몬에 붙으면 중지 시 앱 종료가 늦을 수 있다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

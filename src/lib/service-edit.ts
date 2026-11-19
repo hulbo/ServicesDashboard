@@ -1,7 +1,7 @@
 // 서비스 편집 폼용 도우미: 편집하기 쉬운 형태로 채우고, 저장 전에 쓸모없는 값을 걷어 낸다.
 
 import type { Service, ServiceKind } from './types'
-import { JAVA_KINDS, NODE_KINDS } from './types'
+import { JAVA_KINDS, MAIN_CLASS_KINDS, MAVEN_KINDS, NODE_KINDS } from './types'
 
 const BLOCKS = ['npm', 'node', 'gradle', 'maven', 'jar', 'shell', 'spring'] as const
 
@@ -28,6 +28,16 @@ export function usesArgs(kind: ServiceKind) {
   return ARG_KINDS.includes(kind)
 }
 
+/** 한글 깨짐 방지 옵션을 넣는 타입 (Java) */
+export function usesUtf8Inject(kind: ServiceKind) {
+  return ['gradle-boot', 'maven-boot', 'jar', 'gradle', 'java-main'].includes(kind)
+}
+
+/** 컬러 로그 강제 옵션을 넣는 타입 */
+export function usesColorInject(kind: ServiceKind) {
+  return ['npm', 'node', 'gradle-boot', 'maven-boot', 'maven'].includes(kind)
+}
+
 /** 폼에서 바로 바인딩할 수 있도록 하위 객체를 모두 만들어 둔다. */
 export function normalizeForEdit(src: Service): Service {
   const s: Service = structuredClone(src)
@@ -43,6 +53,7 @@ export function normalizeForEdit(src: Service): Service {
   s.shell ??= { command: '' }
   s.shell.shell ??= 'cmd'
   s.encoding ??= 'auto'
+  s.inject ??= {}
   return s
 }
 
@@ -70,6 +81,7 @@ export function cleanForSave(src: Service): Service {
   const allowed = BLOCKS_BY_KIND[s.type] ?? BLOCKS
   for (const b of BLOCKS) if (!allowed.includes(b)) delete s[b]
   if (s.type !== 'gradle' && s.gradle) delete s.gradle.tasks
+  if (s.gradle && s.gradle.daemon !== true) delete s.gradle.daemon
   if (s.type !== 'maven' && s.maven) delete s.maven.goals
   if (s.npm?.packageManager === 'npm') delete s.npm.packageManager
   if (s.shell?.shell === 'cmd') delete s.shell.shell
@@ -78,6 +90,13 @@ export function cleanForSave(src: Service): Service {
   if (s.runtime) {
     if (!JAVA_KINDS.includes(s.type)) delete s.runtime.jdk
     if (!NODE_KINDS.includes(s.type)) delete s.runtime.node
+    if (!MAVEN_KINDS.includes(s.type)) delete s.runtime.maven
+  }
+  if (!MAIN_CLASS_KINDS.includes(s.type)) delete s.mainClass
+  if (s.inject) {
+    // 기본값(켜짐)은 저장하지 않는다
+    if (s.inject.utf8 !== false) delete s.inject.utf8
+    if (s.inject.color !== false) delete s.inject.color
   }
   if (s.encoding === 'auto') delete s.encoding
   if (typeof s.name === 'string') s.name = s.name.trim() || '이름 없음'

@@ -34,18 +34,70 @@ export interface Service {
   envFiles?: string[]
   jvmArgs?: string[]
   args?: string[]
-  runtime?: { jdk?: string; node?: string; [extra: string]: unknown }
+  mainClass?: string
+  runtime?: { jdk?: string; node?: string; maven?: string; [extra: string]: unknown }
+  inject?: { utf8?: boolean; color?: boolean; [extra: string]: unknown }
   spring?: { profiles?: string[]; [extra: string]: unknown }
   npm?: { script: string; packageManager?: PackageManager; [extra: string]: unknown }
   node?: { entry: string; nodeArgs?: string[]; [extra: string]: unknown }
-  gradle?: { project?: string; tasks?: string[]; options?: string[]; [extra: string]: unknown }
+  gradle?: { project?: string; tasks?: string[]; options?: string[]; daemon?: boolean; [extra: string]: unknown }
   maven?: { module?: string; goals?: string[]; options?: string[]; [extra: string]: unknown }
   jar?: { path: string; [extra: string]: unknown }
   shell?: { command: string; shell?: ShellKind; [extra: string]: unknown }
   ports?: number[]
   encoding?: OutputEncoding
   notes?: string
+  source?: ServiceSource
   [extra: string]: unknown
+}
+
+/** 가져온 서비스의 원본 정보 (다시 가져오기에 쓴다) */
+export interface ServiceSource {
+  kind: SourceKind
+  root: string
+  key: string
+  origin: string
+}
+
+export type SourceKind = 'intellij' | 'npm' | 'gradle' | 'maven'
+
+export interface Candidate {
+  key: string
+  source: SourceKind
+  origin: string
+  group: string | null
+  service: Service
+  scripts: string[]
+  profiles: string[]
+  warnings: string[]
+  recommended: boolean
+  command: string | null
+  commandError: string | null
+}
+
+export interface ScanResult {
+  root: string
+  suggestedVar: string
+  candidates: Candidate[]
+  warnings: string[]
+}
+
+export type RuntimeKind = 'jdk' | 'node' | 'maven'
+
+export interface RuntimeInfo {
+  kind: RuntimeKind
+  path: string
+  version: string
+  major: string
+  vendor: string | null
+  source: string
+}
+
+export const SOURCE_LABELS: Record<SourceKind, string> = {
+  intellij: 'IntelliJ 실행 구성',
+  npm: 'npm 스크립트',
+  gradle: 'Spring Boot (Gradle)',
+  maven: 'Spring Boot (Maven)',
 }
 
 export interface Workspace {
@@ -126,6 +178,8 @@ export const KIND_LABELS: Record<ServiceKind, string> = {
 export const JAVA_KINDS: ServiceKind[] = ['gradle-boot', 'maven-boot', 'java-main', 'jar', 'gradle', 'maven']
 export const SPRING_KINDS: ServiceKind[] = ['gradle-boot', 'maven-boot', 'jar']
 export const NODE_KINDS: ServiceKind[] = ['npm', 'node']
+export const MAVEN_KINDS: ServiceKind[] = ['maven-boot', 'maven']
+export const MAIN_CLASS_KINDS: ServiceKind[] = ['gradle-boot', 'maven-boot', 'java-main']
 
 export const STATE_LABELS: Record<RunState, string> = {
   stopped: '중지됨',

@@ -23,6 +23,9 @@
     | 'file'
     | 'terminal'
     | 'workspace'
+    | 'import'
+    | 'runtime'
+    | 'warning'
 </script>
 
 <script lang="ts">
@@ -103,6 +106,15 @@
   {:else if name === 'workspace'}
     <rect x="2" y="2.5" width="12" height="11" rx="1.2" />
     <path d="M6 2.5v11" />
+  {:else if name === 'import'}
+    <path d="M8 2v8M5 7l3 3 3-3" />
+    <path d="M2.5 10.5v2.5h11v-2.5" />
+  {:else if name === 'runtime'}
+    <rect x="4" y="4" width="8" height="8" rx="1" />
+    <path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2" />
+  {:else if name === 'warning'}
+    <path d="M8 2.5L14 13H2z" />
+    <path d="M8 6.5v3M8 11.3v.2" />
   {/if}
 </svg>
 

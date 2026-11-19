@@ -1,11 +1,12 @@
 // 앱 전역 상태 (Svelte 5 runes)
 
 import { createBackend, errorMessage, type Backend } from './api'
+import { applyImport, type ImportItem } from './importing'
 import { LogStore } from './logstore'
-import type { AppInfo, Group, LogBatch, Service, ServiceStatus, Workspace } from './types'
+import type { AppInfo, Group, LogBatch, RuntimeInfo, ScanResult, Service, ServiceStatus, Workspace } from './types'
 import { isActive } from './types'
 
-export type Selection = { kind: 'service' | 'group'; id: string } | { kind: 'workspace' }
+export type Selection = { kind: 'service' | 'group'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' }
 export type DetailTab = 'console' | 'settings'
 
 export interface Toast {
@@ -57,6 +58,10 @@ class AppState {
   logTick = $state<Record<string, number>>({})
   /** 1초마다 갱신되는 현재 시각 (실행 시간 표시용) */
   now = $state(Date.now())
+  runtimes = $state<RuntimeInfo[]>([])
+  runtimesLoading = $state(false)
+  /** 가져오기 화면에서 마지막으로 스캔한 폴더 */
+  importRoot = $state('')
 
   private logStores = new Map<string, LogStore>()
   private logsLoaded = new Set<string>()
@@ -89,6 +94,18 @@ class AppState {
     await this.loadWorkspace(false)
     for (const s of await this.backend.statuses()) this.applyStatus(s)
     this.ready = true
+    void this.loadRuntimes(false)
+  }
+
+  async loadRuntimes(refresh: boolean) {
+    this.runtimesLoading = true
+    try {
+      this.runtimes = await this.backend.detectRuntimes(refresh)
+    } catch (e) {
+      this.toast('error', `런타임 감지 실패: ${errorMessage(e)}`)
+    } finally {
+      this.runtimesLoading = false
+    }
   }
 
   async loadWorkspace(reload: boolean) {
@@ -97,7 +114,7 @@ class AppState {
       this.workspace = info.workspace
       this.workspacePath = info.path
       this.loadError = null
-      if (this.selection && this.selection.kind !== 'workspace') {
+      if (this.selection && 'id' in this.selection) {
         const id = this.selection.id
         const exists = this.selection.kind === 'service' ? info.workspace.services.some((s) => s.id === id) : info.workspace.groups.some((g) => g.id === id)
         if (!exists) this.selection = null
@@ -333,6 +350,56 @@ class AppState {
       const at = beforeId ? ws.groups.findIndex((x) => x.id === beforeId) : -1
       ws.groups.splice(at < 0 ? ws.groups.length : at, 0, g)
     })
+  }
+
+  // ---------- 가져오기 ----------
+
+  /** 스캔 결과에서 고른 후보를 워크스페이스에 넣는다. */
+  async importItems(scan: ScanResult, items: ImportItem[], varName: string | null) {
+    let outcome = { added: [] as string[], updated: [] as string[] }
+    const ok = await this.mutate((ws) => {
+      outcome = applyImport(ws, scan, items, varName, newId)
+    })
+    if (!ok) return false
+    const parts = []
+    if (outcome.added.length) parts.push(`${outcome.added.length}개 추가`)
+    if (outcome.updated.length) parts.push(`${outcome.updated.length}개 갱신`)
+    this.toast('success', `서비스를 가져왔습니다 (${parts.join(', ') || '변경 없음'}).`)
+    const first = outcome.added[0] ?? outcome.updated[0]
+    if (first) {
+      for (const g of this.workspace.groups) this.collapsed[g.id] = false
+      this.select({ kind: 'service', id: first })
+      this.tab = 'settings'
+    }
+    return true
+  }
+
+  /** 가져온 서비스를 원본(IntelliJ 구성 등)에서 다시 읽어 실행 정의를 갱신한다. */
+  async resync(id: string) {
+    const svc = this.workspace.services.find((s) => s.id === id)
+    const src = svc?.source
+    if (!svc || !src?.root || !src.key) {
+      this.toast('error', '가져온 출처 정보가 없는 서비스입니다.')
+      return
+    }
+    try {
+      const scan = await this.backend.scanProject(src.root)
+      const cand = scan.candidates.find((c) => c.key === src.key)
+      if (!cand) {
+        this.toast('error', `원본 구성을 찾지 못했습니다: ${src.origin} (${src.root})`)
+        return
+      }
+      const item: ImportItem = { candidate: cand, selected: true, name: svc.name, group: '' }
+      let changed = false
+      const ok = await this.mutate((ws) => {
+        const before = JSON.stringify(ws.services.find((s) => s.id === id))
+        applyImport(ws, scan, [item], null, newId)
+        changed = before !== JSON.stringify(ws.services.find((s) => s.id === id))
+      })
+      if (ok) this.toast('success', changed ? `'${svc.name}'을(를) 원본에서 다시 가져왔습니다.` : '원본과 같아 바뀐 내용이 없습니다.')
+    } catch (e) {
+      this.toast('error', `다시 가져오기 실패: ${errorMessage(e)}`)
+    }
   }
 
   // ---------- 화면 ----------

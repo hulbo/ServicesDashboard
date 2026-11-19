@@ -4,7 +4,7 @@ IntelliJ를 켜지 않고 로컬 개발 서비스를 띄우는 **가벼운 데�
 
 Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스를 한 화면에서 실행·중지·재시작하고, 서비스마다 콘솔 로그를 본다. IntelliJ의 Services 탭처럼 **왼쪽에는 서비스 트리, 오른쪽에는 콘솔 로그**를 둔다.
 
-> **현재 상태: M1 (MVP) 완료.** 서비스 등록·실행·중지·로그 확인이 된다. IntelliJ 설정 가져오기와 JDK/Node 자동 감지는 M2에서 추가한다. 전체 계획은 [docs/PLANNING.md](docs/PLANNING.md)에 있다.
+> **현재 상태: M2 완료.** 서비스 실행·중지·로그 확인(M1)에 더해, IntelliJ 실행 구성·package.json·Spring Boot 모듈 가져오기와 JDK/Node/Maven 자동 감지가 된다. 로그 검색·포트 감지·트레이는 M3에서 추가한다. 전체 계획은 [docs/PLANNING.md](docs/PLANNING.md)에 있다.
 
 ## 왜 만드나
 
@@ -16,7 +16,7 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 
 ```
 +------------------------------+-------------------------------------------------+
-| [+] [그룹+] [■■]         [WS] | ● PortalApplication  실행 중  PID 1234 · 3분    |
+| [+] [그룹+] [⤓] [■■]  [RT][WS] | ● PortalApplication  실행 중  PID 1234 · 3분    |
 | [ 서비스 검색            ]   |                            [■ 중지] [⟳ 재시작] |
 | v server            1/3      |  콘솔 | 설정                                     |
 |     ● PortalApi    :8080     | > Task :apps:portal:bootRun                     |
@@ -29,7 +29,7 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 +--------------------------------------------------------------------------------+
 ```
 
-## M1에서 되는 것
+## 되는 것
 
 | 기능 | 설명 |
 |---|---|
@@ -40,8 +40,12 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | 콘솔 | 서비스별 2만 줄 링 버퍼, 가상 스크롤, ANSI 색상(16/256/트루컬러), stderr 구분, 자동 스크롤과 "새 로그 N줄" 표시, 전체 복사, 지우기(Ctrl+L) |
 | 한글 로그 | 출력 인코딩 자동 판별(UTF-8 → 실패 시 CP949), 서비스별 고정 가능 |
 | 설정 폼 | 타입별 입력 항목, 환경변수 편집(비밀번호류 값 가림), env 파일, 프로파일, VM 옵션, 인자, 포트, 메모, **실행 명령 미리보기**, 저장(Ctrl+S)·저장 후 재시작 |
-| 런타임 지정 | 서비스별 JDK 경로(이 프로세스에만 `JAVA_HOME`·`PATH` 적용), Node 경로 |
-| 소스 수정 없음 | Gradle `bootRun`의 VM 옵션은 대시보드가 만든 init script(`-I`)로 주입, Maven은 `-Dspring-boot.run.*` 속성 사용 |
+| **가져오기 (M2)** | 프로젝트 폴더를 고르면 IntelliJ 실행 구성(`.run/*.run.xml`, `.idea/workspace.xml`)·`package.json` 스크립트·Spring Boot 모듈을 찾아 서비스로 변환. 미리보기에서 고르고 이름·그룹·스크립트·프로파일을 고친 뒤 추가 |
+| **다시 가져오기 (M2)** | 원본 구성이 바뀌면 서비스 우클릭 → *원본에서 다시 가져오기*. 실행 정의만 갱신하고 이름·그룹·메모는 유지 |
+| **런타임 감지 (M2)** | JDK(JAVA_HOME, Program Files, IntelliJ가 받은 JDK, IntelliJ JDK 목록, PATH), Node(PATH, nvm, Volta, fnm), Maven(MAVEN_HOME, PATH, IntelliJ 번들)을 찾아 목록으로 보여 줌 |
+| 런타임 지정 | 서비스별 JDK·Node·Maven을 감지된 목록에서 고르거나 **버전 별칭**(`17`, `1.8`, `20`)으로 지정. 이 프로세스에만 `JAVA_HOME`·`PATH` 적용 |
+| **자동 옵션 (M2)** | 한글 깨짐 방지(Java와 Gradle·Maven JVM에 `-Dfile.encoding=UTF-8` 등), 컬러 로그(`FORCE_COLOR=1`, `--spring.output.ansi.enabled=always`, `-Dstyle.color=always`). 서비스별로 끌 수 있고 직접 지정한 값은 그대로 둔다 |
+| 소스 수정 없음 | Gradle `bootRun`의 VM 옵션·메인 클래스는 대시보드가 만든 init script(`-I`)로 주입, Maven은 `-Dspring-boot.run.*` 속성 사용 |
 | 변수·계층 | `${var:ROOT}` 워크스페이스 변수, `${env:NAME}`, 환경변수 계층(워크스페이스 → 그룹 → env 파일 → 서비스) |
 
 ### 단축키
@@ -64,6 +68,23 @@ GitHub Actions가 `main`에 올라올 때마다 Windows 설치본(NSIS)을 만�
 
 ## 사용법
 
+### 프로젝트에서 가져오기 (권장)
+
+1. 왼쪽 위 **가져오기**(⤓)를 누르고 프로젝트 폴더(`.idea`가 있는 루트)를 고른 뒤 **스캔**한다.
+2. 후보가 출처별(IntelliJ 실행 구성 / npm 스크립트 / Spring Boot 모듈)로 나온다. 각 후보에 실제 실행 명령이 미리 보이고, 문제가 있으면 빨간 글씨나 경고로 알려 준다.
+3. 필요한 것만 체크하고 이름·그룹·스크립트·프로파일을 고친 뒤 **가져오기**를 누른다. *프로젝트 경로를 변수로 저장*을 켜 두면 작업 디렉터리가 `${var:MY_PROJECT}/...`로 저장돼 폴더를 옮겨도 변수 하나만 고치면 된다.
+
+| IntelliJ 구성 | 변환 결과 |
+|---|---|
+| Spring Boot, Application | Gradle 프로젝트면 `gradle-boot`(모듈 → `:apps:portal`), Maven이면 `maven-boot`(artifactId → `-pl` 모듈). 메인 클래스·프로파일·VM 옵션·인자·환경변수·*구성 속성 재정의* 포함 |
+| npm | `npm` (package.json 위치, 스크립트, 인자, 패키지 매니저, 프로젝트 Node 인터프리터) |
+| Node.js, Jar, Maven, Gradle, Shell Script | `node`, `jar`, `maven`/`maven-boot`, `gradle`/`gradle-boot`, `shell` |
+| 폴더(`folderName`) | 그룹 |
+| 프로젝트 SDK·대체 JRE | IntelliJ JDK 목록이나 감지된 JDK에서 실제 경로를 찾아 지정 |
+| 복합(Compound) | 아직 지원하지 않음 (M4 실행 프리셋) |
+
+### 직접 추가
+
 1. 왼쪽 위 **+** 로 서비스를 추가하면 설정 탭이 열린다.
 2. 실행 타입과 작업 디렉터리를 고르고 타입별 항목을 채운다. 아래쪽 **실행 명령 미리보기**에서 실제로 실행될 명령을 확인한다.
 3. 저장(Ctrl+S) 후 **시작**을 누르면 콘솔 탭에 로그가 나온다.
@@ -80,6 +101,8 @@ GitHub Actions가 `main`에 올라올 때마다 Windows 설치본(NSIS)을 만�
 | `shell` (cmd) | `cmd.exe /d /s /c "<명령>"` |
 
 Gradle Wrapper(`gradlew.bat`)와 Maven Wrapper(`mvnw.cmd`)는 작업 디렉터리와 상위 폴더에서 찾아 우선 사용한다.
+
+Gradle은 기본으로 `--no-daemon`으로 실행한다. 그래야 빌드 JVM과 앱이 모두 서비스의 프로세스 묶음(Job) 안에 들어가 중지할 때 바로 함께 종료된다. 설정에서 *데몬 재사용*을 켜면 시작이 빨라지지만, IntelliJ 등이 띄운 데몬에 붙으면 중지 후 앱 종료가 몇 초 늦을 수 있다.
 
 ## 설정 파일
 
@@ -138,12 +161,15 @@ src/                       프론트엔드 (Svelte 5 + TypeScript)
   lib/state.svelte.ts      앱 상태
   lib/ansi.ts              ANSI 색상 파서
   lib/logstore.ts          콘솔 로그 버퍼
-  lib/components/          ServiceTree, ConsoleView, ServiceForm, ...
+  lib/importing.ts         가져오기 후보 → 워크스페이스 반영 (변수 치환, 다시 가져오기 병합)
+  lib/components/          ServiceTree, ConsoleView, ServiceForm, ImportPanel, RuntimesPanel, ...
 src-tauri/src/             백엔드 (Rust, Tauri 2)
   model.rs                 워크스페이스 JSON 모델
   launch.rs                서비스 정의 → 실행 명령
   process.rs               실행·중지·상태 관리
   job.rs                   Windows Job Object (프로세스 트리 묶기)
+  runtime.rs               JDK·Node·Maven 감지와 버전 별칭 해석
+  importers/               IntelliJ 실행 구성·package.json·Spring Boot 모듈 스캔
   logs.rs                  링 버퍼, 줄 조립, 인코딩 해석
   store.rs                 설정 파일 저장
   commands.rs              IPC 명령
@@ -157,13 +183,13 @@ docs/PLANNING.md           기획서
 |---|---|---|
 | M0 | 프로젝트 구성, CI, 워크스페이스 스키마 | 완료 |
 | M1 | MVP: 트리 + 콘솔, npm / shell / Spring Boot(Gradle·Maven) / jar 실행, 트리 종료, 설정 저장 | 완료 |
-| M2 | IntelliJ·package.json·Spring Boot 가져오기, JDK / Node 런타임 감지, 인코딩·색상 자동 주입 | 예정 |
+| M2 | IntelliJ·package.json·Spring Boot 가져오기, JDK / Node / Maven 런타임 감지, 인코딩·색상 자동 주입 | 완료 |
 | M3 | 로그 검색·필터, 준비·포트 감지, 포트 충돌 처리, 트레이·알림, 로그 파일 | 예정 |
 | M4 | 의존 순서 실행, 프리셋, 자동 재시작, 디버그 모드, 빠른 java 기동 | 예정 |
 
 자세한 범위와 완료 기준은 [기획서 9장](docs/PLANNING.md#9-마일스톤)에 있다.
 
-### 알려진 제한 (M1)
+### 알려진 제한
 
 - 중지는 프로세스 트리를 바로 종료한다. 정상 종료 신호(Ctrl+Break)를 먼저 보내는 단계는 아직 없다.
 - 준비(Ready) 감지가 없어 프로세스가 뜨면 바로 "실행 중"으로 표시한다 (M3).

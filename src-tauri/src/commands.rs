@@ -5,10 +5,12 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::importers::{self, ScanContext, ScanResult};
 use crate::launch::{self, LaunchContext, LaunchPreview, LaunchSpec};
 use crate::logs::{LogBatch, LogHub, LogLine, STREAM_SYS};
 use crate::model::{Service, Workspace};
 use crate::process::{EventSink, ProcessManager, ServiceStatus};
+use crate::runtime::{self, DetectEnv, RuntimeInfo};
 use crate::store::Store;
 
 pub const EVENT_STATE: &str = "service://state";
@@ -31,6 +33,9 @@ pub struct AppCore {
     pub workspace: Mutex<Result<Workspace, String>>,
     pub manager: Arc<ProcessManager>,
     pub logs: Arc<LogHub>,
+    /// 감지된 런타임 (처음 필요할 때 또는 앱 시작 직후 백그라운드에서 채운다)
+    pub runtimes: Mutex<Option<Vec<RuntimeInfo>>>,
+    pub detect_env: DetectEnv,
 }
 
 #[derive(Serialize)]
@@ -65,11 +70,39 @@ impl AppCore {
         Ok(WorkspaceInfo { workspace: self.current()?, path: self.store.workspace_path.to_string_lossy().into_owned() })
     }
 
+    /// 런타임 목록. 아직 감지하지 않았거나 refresh면 지금 감지한다.
+    pub fn runtimes(&self, refresh: bool) -> Vec<RuntimeInfo> {
+        let mut guard = self.runtimes.lock().unwrap();
+        if refresh || guard.is_none() {
+            *guard = Some(runtime::detect(&self.detect_env));
+        }
+        guard.clone().unwrap_or_default()
+    }
+
     fn build_spec(&self, ws: &Workspace, svc: &Service) -> Result<LaunchSpec, String> {
         let dir = self.store.workspace_dir();
+        let runtimes = self.runtimes(false);
         launch::build(
-            &LaunchContext { workspace: ws, workspace_dir: &dir, gradle_init_script: &self.store.gradle_init_script },
+            &LaunchContext {
+                workspace: ws,
+                workspace_dir: &dir,
+                gradle_init_script: &self.store.gradle_init_script,
+                runtimes: &runtimes,
+            },
             svc,
+        )
+    }
+
+    pub fn scan(&self, root: &str) -> Result<ScanResult, String> {
+        let runtimes = self.runtimes(false);
+        importers::scan(
+            std::path::Path::new(root.trim()),
+            &ScanContext {
+                runtimes: &runtimes,
+                jetbrains_dirs: &self.detect_env.jetbrains_dirs,
+                user_home: self.detect_env.user_home.clone(),
+                gradle_init_script: &self.store.gradle_init_script,
+            },
         )
     }
 
@@ -223,6 +256,18 @@ pub fn logs_clear(core: Core, id: String) {
 pub fn launch_preview(core: Core, service: Service) -> Result<LaunchPreview, String> {
     let ws = core.current()?;
     core.build_spec(&ws, &service).map(|s| LaunchPreview::from(&s))
+}
+
+#[tauri::command]
+pub async fn runtimes_detect(core: Core<'_>, refresh: bool) -> Result<Vec<RuntimeInfo>, String> {
+    let core = core.inner().clone();
+    blocking(move || Ok(core.runtimes(refresh))).await
+}
+
+#[tauri::command]
+pub async fn project_scan(core: Core<'_>, root: String) -> Result<ScanResult, String> {
+    let core = core.inner().clone();
+    blocking(move || core.scan(&root)).await
 }
 
 #[tauri::command]
