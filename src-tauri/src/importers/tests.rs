@@ -35,7 +35,8 @@ impl Fixture {
 /// Gradle 멀티 프로젝트 + IntelliJ 구성 + 프론트엔드 2개
 fn gradle_fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let base = dir.path().to_path_buf();
+    // CI 러너처럼 임시 폴더가 8.3 짧은 경로(RUNNER~1)여도 스캔 결과(정규화된 긴 경로)와 비교할 수 있게 한다.
+    let base = strip_verbatim(&fs::canonicalize(dir.path()).unwrap());
     let root = base.join("shop");
     let r = root.as_path();
 
