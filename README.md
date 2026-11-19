@@ -37,7 +37,7 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | 실행 타입 | `npm`(npm/yarn/pnpm), `node`, `gradle-boot`, `maven-boot`, `jar`, `gradle`, `maven`, `shell`(cmd/PowerShell/pwsh/bash) |
 | 실행 제어 | 시작·중지·재시작, 그룹 전체 시작·중지, 전체 중지 |
 | 확실한 종료 | 서비스마다 Windows Job Object를 만들어 프로세스 트리 전체를 종료. 대시보드가 비정상 종료돼도 서비스 프로세스가 고아로 남지 않음 |
-| 콘솔 | 서비스별 2만 줄 링 버퍼, 가상 스크롤, ANSI 색상(16/256/트루컬러), stderr 구분, 자동 스크롤과 "새 로그 N줄" 표시, 전체 복사, 지우기(Ctrl+L) |
+| 콘솔 | 서비스별 2만 줄 링 버퍼, 가상 스크롤, ANSI 색상(16/256/트루컬러), stderr 구분, 자동 스크롤과 "새 로그 N줄" 표시, 전체 선택(Ctrl+A)·복사, 지우기(Ctrl+L). 직접 시작·재시작하면 이전 실행 로그를 지우고 새로 보여 줌(설정에서 끌 수 있음, 자동 재시작은 원인을 볼 수 있게 남김) |
 | **콘솔 검색·필터 (M3)** | 검색(Ctrl+F, 대소문자·정규식, Enter/Shift+Enter로 이동), 일치 줄만 보기, ERROR·WARN 줄 강조와 개수·레벨 필터(스택트레이스 포함), 긴 스택트레이스 접기, 수신 시각 표시, URL 클릭으로 브라우저 열기, 파일로 저장 |
 | **준비 감지 (M3)** | 시작하면 '시작 중'으로 두었다가 준비 신호(로그 패턴·포트 열림·HTTP 헬스 URL)가 오면 '실행 중'으로 바꾸고 기동 시간을 보여 줌. 기본: Spring Boot `Started … in N seconds`, npm/node `Local: http://…` 등. 서비스별로 바꾸거나 끌 수 있음 |
 | **포트·URL 감지 (M3)** | 로그의 `http://localhost:5173/`, `Tomcat started on port 8080 … context path '/api'` 등에서 주소를 찾아 헤더·트리에 표시하고 클릭하면 브라우저로 염 |
@@ -75,6 +75,7 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | 설정 저장 | `Ctrl+S` (설정 탭에서) |
 | 콘솔 검색 / 다음·이전 | `Ctrl+F` / `Enter`·`Shift+Enter` (콘솔에서) |
 | 콘솔 지우기 | `Ctrl+L` (콘솔에서) |
+| 콘솔 전체 선택 / 복사 | `Ctrl+A` / `Ctrl+C` (콘솔에서. 화면 전체가 아니라 콘솔 내용만 선택하고, 접힌 스택트레이스까지 복사) |
 
 ## 설치
 

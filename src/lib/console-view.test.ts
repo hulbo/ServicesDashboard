@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRows, compileQuery, decorate, levelCounts, LEVEL_ERROR, LEVEL_WARN, type ViewOptions } from './console-view'
+import { buildRows, compileQuery, decorate, levelCounts, LEVEL_ERROR, LEVEL_WARN, rowLineCount, viewText, type ViewOptions } from './console-view'
 import { LogStore } from './logstore'
 
 function store(texts: string[]) {
@@ -78,6 +78,25 @@ describe('buildRows', () => {
     expect(compileQuery('', false, false)).toBeNull()
     const re = compileQuery('B\.(f|g)', true, true) as RegExp
     expect(buildRows(s.lines, { ...base, query: re }).matches).toHaveLength(2)
+  })
+})
+
+describe('전체 선택 복사 (Ctrl+A)', () => {
+  it('접힌 스택트레이스까지 모든 줄을 복사한다', () => {
+    const s = store(trace)
+    const r = viewText(s.lines, base)
+    expect(r.count).toBe(trace.length)
+    expect(r.text).toBe(trace.join('\n'))
+    expect(rowLineCount(buildRows(s.lines, base).rows)).toBe(trace.length)
+  })
+
+  it('레벨·검색 필터를 걸었으면 보이는 줄만, 시각 표시를 켰으면 시각도', () => {
+    const s = store(trace)
+    expect(viewText(s.lines, { ...base, levels: new Set([LEVEL_WARN]) }).text).toBe('2026-11-19 WARN  느림')
+    const q = compileQuery('B.java:[12]', true, false) as RegExp
+    expect(viewText(s.lines, { ...base, query: q, filterMode: true }).count).toBe(2)
+    expect(viewText(s.lines, { ...base, query: q }).count).toBe(trace.length) // 필터 모드가 아니면 전부
+    expect(viewText(store(['a']).lines, base, () => '12:00:00.000').text).toBe('12:00:00.000 a')
   })
 })
 

@@ -54,6 +54,17 @@
       </section>
 
       <section>
+        <h3>콘솔</h3>
+        <label class="check">
+          <input type="checkbox" bind:checked={draft.clearConsoleOnStart} />
+          시작할 때 이전 콘솔 로그 지우기
+        </label>
+        <p class="hint">
+          서비스를 직접 시작·재시작하면(그룹·프리셋·브랜치 전환 포함) 이전 실행의 로그를 지우고 새로 보여 줍니다. 비정상 종료 후 <b>자동 재시작</b>할 때는 원인을 볼 수 있게 지우지 않습니다. 로그 파일에는 그대로 남습니다.
+        </p>
+      </section>
+
+      <section>
         <h3>로그 파일</h3>
         <label class="check">
           <input type="checkbox" bind:checked={draft.logFiles.enabled} />

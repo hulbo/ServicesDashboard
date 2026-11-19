@@ -188,7 +188,19 @@ export function createMockBackend(): Backend {
   const logListeners = new Set<(b: LogBatch[]) => void>()
   const errorListeners = new Set<(e: StartError) => void>()
   let runId = 1
-  let settings: AppSettings = { currentWorkspace: 'default', closeToTray: true, notifications: true, logFiles: { enabled: false, retentionDays: 7 } }
+  let settings: AppSettings = {
+    currentWorkspace: 'default',
+    closeToTray: true,
+    notifications: true,
+    logFiles: { enabled: false, retentionDays: 7 },
+    clearConsoleOnStart: true,
+  }
+  /** 직접 시작할 때 이전 로그 지우기 (실제 백엔드의 reset 묶음과 같게) */
+  const resetLogs = (id: string) => {
+    if (!settings.clearConsoleOnStart) return
+    logs.set(id, [])
+    logListeners.forEach((cb) => cb([{ id, reset: true, lines: [] }]))
+  }
   const occupied = new Map<number, { pid: number; name: string }>([[5174, { pid: 4242, name: 'node.exe' }]])
   // 가짜 git 저장소 (ROOT 변수 폴더)
   const gitRoot = 'C:/Project/sample'
@@ -376,12 +388,14 @@ export function createMockBackend(): Backend {
     },
     statuses: async () => [...statuses.values()],
     start: (id, debug) => {
+      if (!isActive(statuses.get(id)?.state)) resetLogs(id)
       void launch(id, debug)
       return Promise.resolve()
     },
     stop,
     restart: async (id, debug) => {
       await stop(id)
+      resetLogs(id)
       void launch(id, debug)
     },
     startGroup: async (gid) => {

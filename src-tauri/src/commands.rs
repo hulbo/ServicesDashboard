@@ -283,8 +283,22 @@ impl AppCore {
 
     /// 서비스들을 의존 순서대로 시작한다. 의존 대상이 준비될 때까지 '대기 중'으로 두고,
     /// 실제 시작은 백그라운드에서 한다 (실패는 on_error로 알린다).
-    /// `manual`이면 사용자가 직접 시작한 것으로 보고 자동 재시작 횟수를 초기화한다.
+    /// `manual`이면 사용자가 직접 시작한 것으로 보고 자동 재시작 횟수를 초기화하고,
+    /// (설정이 켜져 있으면) 새로 시작하는 서비스의 이전 콘솔 로그를 지운다.
     pub fn launch(self: &Arc<Self>, ids: Vec<String>, debug: bool, manual: bool) -> Result<(), String> {
+        self.launch_opts(ids, debug, manual, manual)
+    }
+
+    /// 새로 시작할 서비스 (의존 대상 포함, 이미 실행 중인 것 제외)
+    fn to_start(&self, ws: &Workspace, ids: &[String]) -> Vec<String> {
+        ws.launch_order(ids).into_iter().filter(|id| !self.is_active(id)).collect()
+    }
+
+    fn clear_on_start(&self) -> bool {
+        self.settings.lock().unwrap().clear_console_on_start
+    }
+
+    fn launch_opts(self: &Arc<Self>, ids: Vec<String>, debug: bool, manual: bool, reset_logs: bool) -> Result<(), String> {
         let ws = self.current()?;
         for id in &ids {
             ws.service(id).ok_or_else(|| format!("서비스를 찾을 수 없습니다: {id}"))?;
@@ -296,11 +310,15 @@ impl AppCore {
             }
         }
         let explicit: std::collections::HashSet<String> = ids.iter().cloned().collect();
-        let pending: Vec<String> = ws.launch_order(&ids).into_iter().filter(|id| !self.is_active(id)).collect();
+        let pending = self.to_start(&ws, &ids);
         if pending.is_empty() {
             return Ok(());
         }
+        let reset_logs = reset_logs && self.clear_on_start();
         for id in &pending {
+            if reset_logs {
+                self.logs.reset(id);
+            }
             self.manager.set_waiting(id);
         }
         let me = Arc::clone(self);
@@ -752,9 +770,12 @@ impl AppCore {
         let branch = match repo_git.switch(target) {
             Ok(b) => b,
             Err(e) => {
-                // 전환하지 못했으면 내렸던 서비스를 원래 브랜치 그대로 다시 올린다
+                // 전환하지 못했으면 내렸던 서비스를 원래 브랜치 그대로 다시 올린다 (콘솔은 지우지 않는다)
+                for id in &ids {
+                    self.logs.push(id, STREAM_SYS, format!("✕ 브랜치 전환 실패: {e}"));
+                }
                 if restart && !ids.is_empty() {
-                    let _ = self.launch(ids.clone(), false, true);
+                    let _ = self.launch_opts(ids.clone(), false, true, false);
                 }
                 return Err(e);
             }
@@ -767,7 +788,14 @@ impl AppCore {
         }
         let restarted = restart && !ids.is_empty();
         if restarted {
-            if let Err(e) = self.launch(ids.clone(), false, true) {
+            // 새 브랜치로 다시 시작: 이전 로그를 지우되 무엇이 바뀌었는지는 첫 줄로 남긴다
+            if self.clear_on_start() {
+                for id in &ids {
+                    self.logs.reset(id);
+                    self.logs.push(id, STREAM_SYS, format!("⎇ 브랜치 전환: {from} → {branch}{}", if pull { " (pull)" } else { "" }));
+                }
+            }
+            if let Err(e) = self.launch_opts(ids.clone(), false, true, false) {
                 warnings.push(format!("다시 시작 실패: {e}"));
             }
         }

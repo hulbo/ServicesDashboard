@@ -192,8 +192,10 @@ class AppState {
 
   private applyLogs(batches: LogBatch[]) {
     for (const b of batches) {
-      const added = this.logStore(b.id).append(b.lines)
-      if (added) this.logTick[b.id] = (this.logTick[b.id] ?? 0) + 1
+      const store = this.logStore(b.id)
+      if (b.reset) store.clear()
+      const added = store.append(b.lines)
+      if (added || b.reset) this.logTick[b.id] = (this.logTick[b.id] ?? 0) + 1
     }
   }
 

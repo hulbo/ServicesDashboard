@@ -30,6 +30,9 @@ pub struct Settings {
     pub notifications: bool,
     #[serde(default)]
     pub log_files: LogFileSettings,
+    /// 서비스를 직접 시작·재시작할 때 이전 실행의 콘솔 로그를 지운다 (자동 재시작은 지우지 않음)
+    #[serde(default = "yes")]
+    pub clear_console_on_start: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -67,6 +70,7 @@ impl Default for Settings {
             close_to_tray: true,
             notifications: true,
             log_files: LogFileSettings::default(),
+            clear_console_on_start: true,
         }
     }
 }

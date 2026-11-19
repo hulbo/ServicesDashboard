@@ -106,6 +106,25 @@ export function buildRows(lines: ViewLine[], opts: ViewOptions): { rows: Row[]; 
   return { rows, matches }
 }
 
+/**
+ * 전체 선택(Ctrl+A) 후 복사할 글: 지금 보기 조건(레벨·검색 필터)에 맞는 줄 모두.
+ * 접힌 스택트레이스도 펼쳐서 넣는다. 콘솔은 보이는 줄만 그리는 가상 스크롤이라 브라우저 선택으로는 전체를 복사할 수 없다.
+ */
+export function viewText(lines: ViewLine[], opts: ViewOptions, time?: (ts: number) => string): { text: string; count: number } {
+  const out: string[] = []
+  for (const r of buildRows(lines, { ...opts, foldFrames: false }).rows) {
+    if (r.kind === 'line') out.push(time ? `${time(r.line.ts)} ${r.line.plain}` : r.line.plain)
+  }
+  return { text: out.join('\n'), count: out.length }
+}
+
+/** 화면 행(접힘 포함)이 나타내는 실제 줄 수 */
+export function rowLineCount(rows: Row[]): number {
+  let n = 0
+  for (const r of rows) n += r.kind === 'line' ? 1 : r.count
+  return n
+}
+
 export interface Piece {
   text: string
   style: string

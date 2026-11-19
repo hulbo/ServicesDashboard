@@ -31,7 +31,16 @@ pub struct LogLine {
 #[derive(Debug, Clone, Serialize)]
 pub struct LogBatch {
     pub id: String,
+    /// 화면의 콘솔도 비우고 이 줄들부터 다시 보여 줄 것 (새로 시작할 때 이전 실행 로그 지우기)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reset: bool,
     pub lines: Vec<LogLine>,
+}
+
+#[derive(Default)]
+struct Pending {
+    reset: bool,
+    lines: Vec<LogLine>,
 }
 
 #[derive(Default)]
@@ -43,7 +52,7 @@ struct ServiceLog {
 #[derive(Default)]
 struct HubInner {
     buffers: HashMap<String, ServiceLog>,
-    pending: IndexMap<String, Vec<LogLine>>,
+    pending: IndexMap<String, Pending>,
 }
 
 pub struct LogHub {
@@ -77,7 +86,7 @@ impl LogHub {
             while buf.lines.len() > self.capacity {
                 buf.lines.pop_front();
             }
-            let pending = inner.pending.entry(id.to_string()).or_default();
+            let pending = &mut inner.pending.entry(id.to_string()).or_default().lines;
             pending.push(line.clone());
             if pending.len() > self.capacity {
                 let excess = pending.len() - self.capacity;
@@ -105,12 +114,24 @@ impl LogHub {
         inner.pending.shift_remove(id);
     }
 
+    /// 버퍼를 비우고 화면에도 비우라고 알린다 (다음 묶음에 `reset`이 붙는다).
+    /// 아직 보내지 않은 이전 줄은 버린다.
+    pub fn reset(&self, id: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(b) = inner.buffers.get_mut(id) {
+            b.lines.clear();
+        }
+        let p = inner.pending.entry(id.to_string()).or_default();
+        p.lines.clear();
+        p.reset = true;
+    }
+
     pub fn take_pending(&self) -> Vec<LogBatch> {
         let mut inner = self.inner.lock().unwrap();
         std::mem::take(&mut inner.pending)
             .into_iter()
-            .filter(|(_, lines)| !lines.is_empty())
-            .map(|(id, lines)| LogBatch { id, lines })
+            .filter(|(_, p)| p.reset || !p.lines.is_empty())
+            .map(|(id, p)| LogBatch { id, reset: p.reset, lines: p.lines })
             .collect()
     }
 }
@@ -226,5 +247,29 @@ mod tests {
         hub.clear("a");
         hub.push("a", STREAM_OUT, "after".into());
         assert_eq!(hub.snapshot("a")[0].seq, 251);
+    }
+
+    #[test]
+    fn reset_drops_old_lines_and_tells_the_screen() {
+        let hub = LogHub::new(100);
+        hub.push("a", STREAM_OUT, "old 1".into());
+        hub.take_pending();
+        hub.push("a", STREAM_OUT, "old 2 (아직 안 보냄)".into());
+        hub.push("b", STREAM_OUT, "other".into());
+        hub.reset("a");
+        hub.push("a", STREAM_SYS, "▶ new run".into());
+        assert_eq!(hub.snapshot("a").iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["▶ new run"]);
+        let batches = hub.take_pending();
+        let a = batches.iter().find(|b| b.id == "a").unwrap();
+        assert!(a.reset, "화면도 비우라는 표시");
+        assert_eq!(a.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["▶ new run"], "보내지 않은 이전 줄은 버림");
+        assert!(!batches.iter().find(|b| b.id == "b").unwrap().reset);
+        // 줄이 없어도 reset만 따로 보낸다
+        hub.reset("b");
+        let batches = hub.take_pending();
+        assert_eq!(batches.len(), 1);
+        assert!(batches[0].reset && batches[0].lines.is_empty());
+        assert!(hub.take_pending().is_empty());
+        assert!(serde_json::to_string(&LogBatch { id: "x".into(), reset: false, lines: vec![] }).unwrap().find("reset").is_none());
     }
 }

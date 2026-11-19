@@ -177,6 +177,8 @@ export interface AppSettings {
   closeToTray: boolean
   notifications: boolean
   logFiles: { enabled: boolean; retentionDays: number }
+  /** 직접 시작·재시작할 때 이전 실행의 콘솔 로그를 지운다 */
+  clearConsoleOnStart: boolean
 }
 
 export const STREAM_OUT = 0
@@ -192,6 +194,8 @@ export interface LogLine {
 
 export interface LogBatch {
   id: string
+  /** 콘솔을 비우고 이 줄들부터 다시 보여 줄 것 (새로 시작) */
+  reset?: boolean
   lines: LogLine[]
 }
 

@@ -41,6 +41,14 @@
     } else if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault()
       document.querySelector<HTMLInputElement>('.filter input')?.focus()
+    } else if (
+      e.ctrlKey &&
+      !e.altKey &&
+      (e.key === 'a' || e.key === 'A') &&
+      !(e.target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable="true"], .console, .merged')
+    ) {
+      // 입력칸·콘솔 밖에서는 화면 전체(트리·버튼 글자)가 선택되지 않게 한다. 콘솔은 자기 내용만 선택한다.
+      e.preventDefault()
     }
   }
 

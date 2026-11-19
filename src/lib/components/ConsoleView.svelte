@@ -2,7 +2,7 @@
   import { tick, untrack } from 'svelte'
   import { app } from '../state.svelte'
   import { errorMessage } from '../api'
-  import { buildRows, compileQuery, decorate, levelCounts, LEVEL_ERROR, LEVEL_WARN, type Level } from '../console-view'
+  import { buildRows, compileQuery, decorate, levelCounts, LEVEL_ERROR, LEVEL_WARN, rowLineCount, viewText, type Level, type ViewOptions } from '../console-view'
   import Icon from './Icon.svelte'
 
   let { serviceId }: { serviceId: string } = $props()
@@ -34,16 +34,14 @@
   const version = $derived(app.logTick[serviceId] ?? 0)
   const compiled = $derived(compileQuery(query, useRegex, caseSensitive))
   const queryRe = $derived(compiled instanceof RegExp ? compiled : null)
+  const opts = $derived<ViewOptions>({ query: queryRe, filterMode, levels: new Set(levels), foldFrames, expanded: new Set(expanded) })
   const view = $derived.by(() => {
     void version
-    return buildRows(store.lines, {
-      query: queryRe,
-      filterMode,
-      levels: new Set(levels),
-      foldFrames,
-      expanded: new Set(expanded),
-    })
+    return buildRows(store.lines, opts)
   })
+  /** Ctrl+A: 콘솔 내용 전체 선택 (보이는 줄만 그리므로 브라우저 선택 대신 직접 표시·복사한다) */
+  let allSelected = $state(false)
+  const selectedCount = $derived(allSelected ? rowLineCount(view.rows) : 0)
   const counts = $derived.by(() => {
     void version
     return levelCounts(store.lines)
@@ -167,8 +165,45 @@
     }
   }
 
+  function selectAll() {
+    allSelected = true
+    window.getSelection()?.removeAllRanges()
+    viewport?.focus()
+  }
+
+  function selectionText() {
+    return viewText(store.lines, opts, showTime ? formatTime : undefined)
+  }
+
+  async function copySelection() {
+    const { text, count } = selectionText()
+    try {
+      await navigator.clipboard.writeText(text)
+      app.toast('success', `${count.toLocaleString()}줄을 클립보드에 복사했습니다.`)
+    } catch (e) {
+      app.toast('error', `복사 실패: ${errorMessage(e)}`)
+    }
+  }
+
+  function onCopy(e: ClipboardEvent) {
+    // 우클릭 메뉴 '복사' 등 키보드가 아닌 복사도 전체 선택이면 콘솔 내용을 넣는다
+    if (!allSelected || !e.clipboardData) return
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', selectionText().text)
+  }
+
   function onKeydown(e: KeyboardEvent) {
-    if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
+    const editing = (e.target as HTMLElement | null)?.closest('input, textarea, select')
+    if (e.ctrlKey && !e.altKey && (e.key === 'a' || e.key === 'A') && !editing) {
+      // 화면 전체(트리·버튼 글자까지)가 아니라 이 콘솔의 내용만 선택한다
+      e.preventDefault()
+      selectAll()
+    } else if (allSelected && e.ctrlKey && (e.key === 'c' || e.key === 'C' || e.key === 'Insert') && !editing) {
+      e.preventDefault()
+      void copySelection()
+    } else if (allSelected && e.key === 'Escape') {
+      allSelected = false
+    } else if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
       e.preventDefault()
       void app.clearLogs(serviceId)
     } else if (e.ctrlKey && (e.key === 'f' || e.key === 'F')) {
@@ -229,8 +264,19 @@
     <button class="tool" title="콘솔 지우기 (Ctrl+L)" disabled={lineCount === 0} onclick={() => app.clearLogs(serviceId)}><Icon name="clear" size={14} /></button>
   </div>
 
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="viewport" bind:this={viewport} bind:clientHeight={height} onscroll={onScroll} tabindex="0" role="log" aria-live="off">
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <div
+    class="viewport"
+    class:all-selected={allSelected}
+    bind:this={viewport}
+    bind:clientHeight={height}
+    onscroll={onScroll}
+    onmousedown={(e) => e.button === 0 && (allSelected = false)}
+    oncopy={onCopy}
+    tabindex="0"
+    role="log"
+    aria-live="off"
+  >
     {#if lineCount === 0}
       <div class="placeholder">
         <p>아직 로그가 없습니다.</p>
@@ -253,6 +299,13 @@
       </div>
     {/if}
   </div>
+
+  {#if allSelected}
+    <div class="sel-hint" role="status">
+      전체 선택 {selectedCount.toLocaleString()}줄 · <b>Ctrl+C</b> 복사 · <b>Esc</b> 해제
+      <button class="mini-btn" onclick={copySelection}>복사</button>
+    </div>
+  {/if}
 
   {#if unseen > 0}
     <button class="new-lines" onclick={toBottom}><Icon name="arrow-down" size={13} /> 새 로그 {unseen.toLocaleString()}줄</button>
@@ -474,6 +527,38 @@
   .line ::selection,
   .line::selection {
     background: var(--console-selection);
+  }
+  .viewport.all-selected .line,
+  .viewport.all-selected .fold {
+    background: var(--console-selection);
+  }
+  .sel-hint {
+    position: absolute;
+    top: 42px;
+    right: 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 6px 5px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 12px;
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+  }
+  .sel-hint b {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .mini-btn {
+    padding: 2px 10px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
   }
   .placeholder {
     padding: 40px 24px;

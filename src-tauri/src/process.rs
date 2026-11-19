@@ -583,15 +583,6 @@ impl ProcessManager {
         };
         self.logs.push(&id, STREAM_SYS, msg);
 
-        {
-            let mut running = self.running.lock().unwrap();
-            if running.get(&id).is_some_and(|r| r.run_id == run_id) {
-                running.remove(&id);
-            }
-        }
-        self.exited.notify_all();
-        drop(job);
-
         let (ports, urls, ready_at, debug_port) = {
             let statuses = self.statuses.lock().unwrap();
             statuses
@@ -601,7 +592,7 @@ impl ProcessManager {
                 .unwrap_or_default()
         };
         self.set_status(ServiceStatus {
-            id,
+            id: id.clone(),
             state,
             pid: None,
             exit_code,
@@ -615,6 +606,17 @@ impl ProcessManager {
             ready_at,
             debug_port,
         });
+
+        // 최종 상태를 먼저 기록한 뒤에 실행 목록에서 뺀다. 순서가 반대면 stop()이 돌아온 직후
+        // (재시작 등) 상태가 아직 '중지 중'으로 보여 다시 시작하지 않거나, 늦게 온 '중지됨'이 새 실행의 '대기 중'을 덮어쓴다.
+        {
+            let mut running = self.running.lock().unwrap();
+            if running.get(&id).is_some_and(|r| r.run_id == run_id) {
+                running.remove(&id);
+            }
+        }
+        self.exited.notify_all();
+        drop(job);
     }
 
     /// 프로세스 트리 전체를 종료하고, 종료될 때까지 기다린다.
@@ -812,6 +814,9 @@ mod tests {
         let t = Instant::now();
         pm.stop("t2").unwrap();
         assert!(t.elapsed() < Duration::from_secs(5), "중지가 너무 오래 걸림: {:?}", t.elapsed());
+        // stop()이 돌아온 순간 이미 '중지됨'이어야 한다 (재시작이 바로 이어서 시작할 수 있게)
+        assert_eq!(pm.status("t2").state, RunState::Stopped, "stop() 직후 상태");
+        assert!(!pm.is_running("t2"));
         let s = wait_state(&pm, "t2", RunState::Stopped);
         assert!(s.pid.is_none());
         assert!(texts(&hub, "t2").last().unwrap().contains("중지됨"));

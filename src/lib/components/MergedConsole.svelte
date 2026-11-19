@@ -92,9 +92,48 @@
   function toggle(id: string) {
     hidden = hidden.includes(id) ? hidden.filter((x) => x !== id) : [...hidden, id]
   }
+
+  /** Ctrl+A: 통합 로그 내용 전체 선택 (보이는 줄만 그리므로 직접 표시·복사한다) */
+  let allSelected = $state(false)
+
+  function selectionText(): string {
+    return rows.map((r) => `${names[r.idx].padEnd(nameWidth)} ${r.line.plain}`).join('\n')
+  }
+
+  async function copySelection() {
+    try {
+      await navigator.clipboard.writeText(selectionText())
+      app.toast('success', `${rows.length.toLocaleString()}줄을 클립보드에 복사했습니다.`)
+    } catch (e) {
+      app.toast('error', `복사 실패: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  function onKeydown(e: KeyboardEvent) {
+    const editing = (e.target as HTMLElement | null)?.closest('input, textarea, select')
+    if (editing) return
+    if (e.ctrlKey && !e.altKey && (e.key === 'a' || e.key === 'A')) {
+      e.preventDefault()
+      allSelected = true
+      window.getSelection()?.removeAllRanges()
+      viewport?.focus()
+    } else if (allSelected && e.ctrlKey && (e.key === 'c' || e.key === 'C' || e.key === 'Insert')) {
+      e.preventDefault()
+      void copySelection()
+    } else if (allSelected && e.key === 'Escape') {
+      allSelected = false
+    }
+  }
+
+  function onCopy(e: ClipboardEvent) {
+    if (!allSelected || !e.clipboardData) return
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', selectionText())
+  }
 </script>
 
-<div class="merged">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="merged" onkeydown={onKeydown}>
   <div class="bar">
     <label class="search">
       <Icon name="search" size={13} />
@@ -111,8 +150,18 @@
     <span class="count">{rows.length.toLocaleString()}줄</span>
     <button class="tool" class:on={follow} title="자동 스크롤" onclick={() => { follow = true; if (viewport) viewport.scrollTop = viewport.scrollHeight }}><Icon name="arrow-down" size={14} /></button>
   </div>
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="viewport" bind:this={viewport} bind:clientHeight={height} onscroll={onScroll} tabindex="0" role="log">
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <div
+    class="viewport"
+    class:all-selected={allSelected}
+    bind:this={viewport}
+    bind:clientHeight={height}
+    onscroll={onScroll}
+    onmousedown={(e) => e.button === 0 && (allSelected = false)}
+    oncopy={onCopy}
+    tabindex="0"
+    role="log"
+  >
     {#if rows.length === 0}
       <div class="placeholder">아직 로그가 없습니다. 서비스를 시작하면 여기에 시간순으로 모여 표시됩니다.</div>
     {:else}
@@ -125,10 +174,17 @@
       </div>
     {/if}
   </div>
+  {#if allSelected}
+    <div class="sel-hint" role="status">
+      전체 선택 {rows.length.toLocaleString()}줄 · <b>Ctrl+C</b> 복사 · <b>Esc</b> 해제
+      <button class="mini-btn" onclick={copySelection}>복사</button>
+    </div>
+  {/if}
 </div>
 
 <style>
   .merged {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -219,6 +275,37 @@
   .tool.on {
     color: var(--accent-text);
     border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .viewport.all-selected .line {
+    background: var(--console-selection);
+  }
+  .sel-hint {
+    position: absolute;
+    top: 42px;
+    right: 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 6px 5px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 12px;
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+  }
+  .sel-hint b {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .mini-btn {
+    padding: 2px 10px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
   }
   .viewport {
     flex: 1;
