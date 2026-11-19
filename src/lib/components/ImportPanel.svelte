@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app } from '../state.svelte'
   import { errorMessage } from '../api'
-  import { findRootVar, initialItems, normPath, type ImportItem, type PresetItem } from '../importing'
+  import { findRootVar, importedKeys, initialItems, normPath, type ImportItem, type PresetItem } from '../importing'
   import type { ScanResult, SourceKind } from '../types'
   import { KIND_LABELS, SOURCE_LABELS } from '../types'
   import Icon from './Icon.svelte'
@@ -21,7 +21,8 @@
   const ORDER: SourceKind[] = ['shared', 'intellij', 'vscode', 'npm', 'gradle', 'maven']
 
   const recentRoots = $derived([...new Set(app.workspace.services.map((s) => s.source?.root).filter((r): r is string => !!r))])
-  const existingKeys = $derived(new Set(app.workspace.services.map((s) => s.source?.key).filter(Boolean)))
+  // 같은 프로젝트 폴더에서 가져온 것만 '이미 있음'이다 (폴더 이름·구성 이름이 같은 다른 프로젝트와 구분)
+  const existingKeys = $derived(scan ? importedKeys(app.workspace, scan.root) : new Set<string>())
   const sections = $derived(
     ORDER.map((kind) => ({ kind, rows: items.map((item, index) => ({ item, index })).filter((r) => r.item.candidate.source === kind) })).filter(
       (s) => s.rows.length > 0,

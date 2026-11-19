@@ -11,6 +11,8 @@ export interface ImportItem {
   script?: string
   /** Spring 후보: 쉼표로 구분한 프로파일 */
   profiles?: string
+  /** 다시 가져오기: 갱신할 서비스 ID (없으면 같은 원본에서 가져온 서비스를 찾는다) */
+  targetId?: string
 }
 
 export function normPath(p: string): string {
@@ -35,6 +37,22 @@ export function applyRootVar(svc: Service, root: string, varName: string): Servi
   if (s.node) s.node.entry = withVar(s.node.entry, root, varName) ?? s.node.entry
   if (s.envFiles) s.envFiles = s.envFiles.map((f) => withVar(f, root, varName) ?? f)
   return s
+}
+
+/**
+ * 같은 원본에서 가져온 서비스인지. 후보 키는 프로젝트 폴더 안의 상대 위치(예: `.run/Api.run.xml`)라서
+ * 폴더까지 같아야 같은 원본이다. 이름이 같은 구성이 있는 다른 프로젝트(복사본·다른 브랜치)를 구분한다.
+ */
+export function isFromSource(svc: Service, root: string, key: string): boolean {
+  const src = svc.source
+  return !!src?.key && src.key === key && !!src.root && normPath(src.root) === normPath(root)
+}
+
+/** 이 프로젝트 폴더에서 이미 가져온 후보 키 */
+export function importedKeys(ws: Workspace, root: string): Set<string> {
+  const keys = new Set<string>()
+  for (const s of ws.services) if (s.source?.key && isFromSource(s, root, s.source.key)) keys.add(s.source.key)
+  return keys
 }
 
 /** root와 같은 값을 가진 워크스페이스 변수 이름 */
@@ -107,7 +125,7 @@ export function applyImport(
   const out: ImportOutcome = { added: [], updated: [], presets: [] }
   /** 후보 키 → 워크스페이스 서비스 ID (프리셋 멤버 연결용) */
   const keyToId = new Map<string, string>()
-  for (const s of ws.services) if (s.source?.key) keyToId.set(s.source.key, s.id)
+  for (const s of ws.services) if (s.source?.key && isFromSource(s, scan.root, s.source.key)) keyToId.set(s.source.key, s.id)
   if (varName) {
     ws.variables = { ...(ws.variables ?? {}), [varName]: scan.root }
   }
@@ -124,7 +142,9 @@ export function applyImport(
     }
     if (rootVar) svc = applyRootVar(svc, scan.root, rootVar)
 
-    const existingIdx = ws.services.findIndex((s) => s.source?.key === item.candidate.key)
+    const existingIdx = item.targetId
+      ? ws.services.findIndex((s) => s.id === item.targetId)
+      : ws.services.findIndex((s) => isFromSource(s, scan.root, item.candidate.key))
     if (existingIdx >= 0) {
       ws.services[existingIdx] = mergeImported(ws.services[existingIdx], svc)
       out.updated.push(ws.services[existingIdx].id)
@@ -163,7 +183,7 @@ export function applyImport(
 
 /** 후보 목록으로 화면용 항목을 만든다. 이미 가져온 후보는 기본 선택하지 않는다. */
 export function initialItems(ws: Workspace, scan: ScanResult): ImportItem[] {
-  const existing = new Set(ws.services.map((s) => s.source?.key).filter(Boolean))
+  const existing = importedKeys(ws, scan.root)
   return scan.candidates.map((c) => ({
     candidate: c,
     selected: c.recommended && !existing.has(c.key),

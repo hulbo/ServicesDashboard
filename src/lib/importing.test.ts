@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyImport, initialItems, mergeImported, uniqueName, withVar } from './importing'
+import { applyImport, importedKeys, initialItems, mergeImported, uniqueName, withVar } from './importing'
 import type { Candidate, ScanResult, Service, Workspace } from './types'
 
 const root = 'C:/Project/shop'
@@ -86,6 +86,55 @@ describe('applyImport', () => {
     expect(s.ports).toEqual([3000])
     expect(s.npm?.script).toBe('dev') // IntelliJ 출처는 원본 스크립트로 갱신
     expect(s.cwd).toBe('${var:SHOP}/front/portal') // 같은 값의 기존 변수를 찾아 쓴다
+  })
+})
+
+describe('이름이 같은 다른 프로젝트', () => {
+  // 같은 저장소를 두 폴더에 받아 둔 경우: 구성 파일·후보 키가 같아도 다른 원본이다
+  const other = 'C:/Project/shop_git'
+  const scanOther: ScanResult = {
+    root: other,
+    suggestedVar: 'SHOP_GIT',
+    warnings: [],
+    presets: [{ key: 'p', name: '전체', origin: '', members: ['a'], missing: [] }],
+    candidates: [
+      cand('a', { name: 'Api', type: 'gradle-boot', cwd: other, source: { kind: 'intellij', root: other, key: 'a', origin: '.run/Api.run.xml' } }, { group: '개발' }),
+    ],
+  }
+  const prod = (): Workspace => ({
+    name: 'w',
+    variables: { SHOP: root },
+    groups: [{ id: 'g-prod', name: '운영' }],
+    services: [{ id: 'prod-api', name: 'Api', type: 'gradle-boot', group: 'g-prod', cwd: '${var:SHOP}', source: { kind: 'intellij', root: 'c:\\project\\SHOP\\', key: 'a', origin: '.run/Api.run.xml' } }],
+  })
+
+  it('다른 폴더의 같은 구성은 이미 있음으로 보지 않고 새로 추가한다', () => {
+    const ws = prod()
+    expect(importedKeys(ws, root).has('a')).toBe(true) // 경로 표기(대소문자·역슬래시·끝 슬래시)는 무시
+    expect(importedKeys(ws, other).size).toBe(0)
+    const items = initialItems(ws, scanOther)
+    expect(items[0].selected).toBe(true)
+    const r = applyImport(ws, scanOther, items, 'SHOP_GIT', newId, [{ preset: scanOther.presets[0], selected: true }])
+    expect(r.updated).toEqual([])
+    expect(r.added).toHaveLength(1)
+    // 기존(운영) 서비스는 그대로
+    expect(ws.services[0]).toEqual(prod().services[0])
+    const added = ws.services[1]
+    expect(added.name).toBe('Api (2)')
+    expect(added.cwd).toBe('${var:SHOP_GIT}')
+    expect(ws.groups.find((g) => g.id === added.group)?.name).toBe('개발')
+    // 프리셋도 새로 가져온 서비스를 가리킨다
+    expect(ws.presets?.[0].services).toEqual([added.id])
+  })
+
+  it('다시 가져오기는 고른 서비스만 갱신한다', () => {
+    const ws = prod()
+    ws.services.push({ ...structuredClone(ws.services[0]), id: 'copy', name: 'Api 복사본' })
+    const scanSame: ScanResult = { ...scanOther, root, candidates: [cand('a', { name: 'Api', type: 'gradle-boot', cwd: `${root}/apps` })] }
+    const r = applyImport(ws, scanSame, [{ candidate: scanSame.candidates[0], selected: true, name: 'Api 복사본', group: '', targetId: 'copy' }], null, newId)
+    expect(r.updated).toEqual(['copy'])
+    expect(ws.services.find((s) => s.id === 'copy')?.cwd).toBe('${var:SHOP}/apps')
+    expect(ws.services.find((s) => s.id === 'prod-api')?.cwd).toBe('${var:SHOP}')
   })
 })
 

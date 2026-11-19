@@ -519,7 +519,7 @@ class AppState {
         this.toast('error', `원본 구성을 찾지 못했습니다: ${src.origin} (${src.root})`)
         return
       }
-      const item: ImportItem = { candidate: cand, selected: true, name: svc.name, group: '' }
+      const item: ImportItem = { candidate: cand, selected: true, name: svc.name, group: '', targetId: id }
       let changed = false
       const ok = await this.mutate((ws) => {
         const before = JSON.stringify(ws.services.find((s) => s.id === id))
