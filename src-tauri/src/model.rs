@@ -523,6 +523,28 @@ impl Workspace {
 mod tests {
     use super::*;
 
+    /// 화면에서 저장할 때(Tauri IPC)처럼 serde_json::Value를 거쳐도 환경변수 순서가 그대로여야 한다.
+    #[test]
+    fn env_order_survives_ipc_value() {
+        let json = r#"{
+            "name": "ws",
+            "variables": {"ZZ": "1", "AA": "2"},
+            "env": {"Z_LAST": "1", "A_FIRST": "2"},
+            "groups": [{"id": "g1", "name": "g", "env": {"B_URL": "b", "A_PASSWORD": "p", "C_USER": "c"}}],
+            "services": [{"id": "s1", "name": "s", "type": "shell", "shell": {"command": "x"}, "env": {"Y": "2", "X": "1"}}]
+        }"#;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        let ws: Workspace = serde_json::from_value(value).unwrap();
+        let keys = |m: &EnvMap| m.keys().cloned().collect::<Vec<_>>().join(",");
+        assert_eq!(keys(&ws.variables), "ZZ,AA");
+        assert_eq!(keys(&ws.env), "Z_LAST,A_FIRST");
+        assert_eq!(keys(&ws.groups[0].env), "B_URL,A_PASSWORD,C_USER");
+        assert_eq!(keys(&ws.services[0].env), "Y,X");
+        // 파일로 쓸 때도 같은 순서
+        let text = serde_json::to_string(&ws).unwrap();
+        assert!(text.find("B_URL").unwrap() < text.find("A_PASSWORD").unwrap());
+    }
+
     #[test]
     fn round_trip_keeps_unknown_fields() {
         let json = r#"{

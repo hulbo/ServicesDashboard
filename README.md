@@ -53,7 +53,7 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | **VS Code·공유 파일 (M4)** | `.vscode/launch.json`(node, npm, node-terminal, java, compounds) 가져오기. 워크스페이스 설정에서 서비스를 프로젝트 폴더의 `services-dashboard.json`(경로는 `${projectDir}`)으로 내보내 팀과 공유 |
 | **로그 파일 (M3)** | 설정에서 켜면 `설정 폴더\logs\<서비스 ID>\YYYY-MM-DD.log`에 저장, 보관 기간이 지나면 삭제 |
 | 한글 로그 | 출력 인코딩 자동 판별(UTF-8 → 실패 시 CP949), 서비스별 고정 가능 |
-| 설정 폼 | 타입별 입력 항목, 환경변수 편집(비밀번호류 값 가림), env 파일, 프로파일, VM 옵션, 인자, 포트, 메모, **실행 명령 미리보기**, 저장(Ctrl+S)·저장 후 재시작 |
+| 설정 폼 | 타입별 입력 항목, 환경변수 편집(비밀번호류 값 가림, 손잡이를 끌거나 `Alt+↑/↓`로 순서 바꾸기, 이름순 정렬), env 파일, 프로파일, VM 옵션, 인자, 포트, 메모, **실행 명령 미리보기**, 저장(Ctrl+S)·저장 후 재시작 |
 | **가져오기 (M2)** | 프로젝트 폴더를 고르면 IntelliJ 실행 구성(`.run/*.run.xml`, `.idea/workspace.xml`)·`package.json` 스크립트·Spring Boot 모듈을 찾아 서비스로 변환. 미리보기에서 고르고 이름·그룹·스크립트·프로파일을 고친 뒤 추가 |
 | **다시 가져오기 (M2)** | 원본 구성이 바뀌면 서비스 우클릭 → *원본에서 다시 가져오기*. 실행 정의만 갱신하고 이름·그룹·메모는 유지 |
 | **런타임 감지 (M2)** | JDK(JAVA_HOME, Program Files, IntelliJ가 받은 JDK, IntelliJ JDK 목록, PATH), Node(PATH, nvm, Volta, fnm), Maven(MAVEN_HOME, PATH, IntelliJ 번들)을 찾아 목록으로 보여 줌 |
@@ -76,6 +76,7 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | 콘솔 검색 / 다음·이전 | `Ctrl+F` / `Enter`·`Shift+Enter` (콘솔에서) |
 | 콘솔 지우기 | `Ctrl+L` (콘솔에서) |
 | 콘솔 전체 선택 / 복사 | `Ctrl+A` / `Ctrl+C` (콘솔에서. 화면 전체가 아니라 콘솔 내용만 선택하고, 접힌 스택트레이스까지 복사) |
+| 환경변수 순서 바꾸기 | 손잡이(⠿)를 끌어서 놓기, 또는 `Alt+↑`/`Alt+↓` (행의 입력칸에서. 손잡이에 포커스가 있으면 `↑`/`↓`만) |
 
 ## 설치
 
