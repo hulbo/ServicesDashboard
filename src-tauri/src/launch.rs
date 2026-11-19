@@ -17,6 +17,8 @@ pub const JVM_ARGS_ENV: &str = "SD_JVM_ARGS";
 pub const JVM_ARGS_SEP: char = '\u{1F}';
 /// Gradle init script가 읽는 환경변수 (bootRun 메인 클래스)
 pub const MAIN_CLASS_ENV: &str = "SD_MAIN_CLASS";
+/// Gradle init script가 읽는 환경변수 (테스트를 IntelliJ처럼: 매번 실행, 출력 표시)
+pub const TEST_MODE_ENV: &str = "SD_TEST_MODE";
 
 /// 한글 깨짐 방지용으로 Java에 넣는 콘솔 인코딩 옵션 (IntelliJ와 같은 방식)
 const UTF8_PROPS: [&str; 5] = ["file.encoding", "stdout.encoding", "stderr.encoding", "sun.stdout.encoding", "sun.stderr.encoding"];
@@ -46,6 +48,19 @@ if (sdJvmArgs) {
     def parsed = sdJvmArgs.split('').findAll { it } as List
     allprojects {
         tasks.withType(JavaExec).configureEach { task -> task.jvmArgs(parsed) }
+    }
+}
+if (System.getenv('SD_TEST_MODE')) {
+    // IntelliJ처럼: 테스트는 UP-TO-DATE로 건너뛰지 않고, 테스트 안의 출력과 결과를 콘솔에 보여 준다.
+    gradle.taskGraph.whenReady { graph ->
+        graph.allTasks.findAll { it instanceof Test }.each { t ->
+            t.outputs.upToDateWhen { false }
+            t.testLogging {
+                showStandardStreams = true
+                events 'passed', 'skipped', 'failed'
+                exceptionFormat 'full'
+            }
+        }
     }
 }
 if (sdMainClass) {
@@ -256,17 +271,22 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
         ServiceKind::GradleBoot | ServiceKind::Gradle => {
             let g = svc.gradle.clone().unwrap_or_default();
             let project = vars.expand_opt(g.project.as_ref())?;
+            let options: Vec<String> = vars.expand_all(&g.options)?.iter().map(|o| unquote(o)).collect();
+            let gradle_tasks: Vec<String> = vars.expand_all(&g.tasks)?.iter().map(|t| unquote(t)).collect();
+            // 테스트를 실행하는 구성이면 IntelliJ처럼 매번 실행하고 출력을 보여 준다
+            let test_mode = svc.kind == ServiceKind::Gradle
+                && (gradle_tasks.iter().any(|t| t == "--tests" || is_test_task(t)));
             let mut a = vec!["--console=plain".to_string()];
             // 데몬을 쓰지 않으면 빌드 JVM과 앱이 모두 이 서비스의 Job 안에 들어가 중지 즉시 함께 종료된다.
-            if !g.daemon.unwrap_or(false) && !g.options.iter().any(|o| o == "--daemon" || o == "--no-daemon") {
+            if !g.daemon.unwrap_or(false) && !options.iter().any(|o| o == "--daemon" || o == "--no-daemon") {
                 a.push("--no-daemon".into());
             }
             if svc.inject_utf8() {
                 add_build_tool_utf8(&mut env, "GRADLE_OPTS");
             }
-            a.extend(vars.expand_all(&g.options)?);
+            a.extend(options);
             let boot_main = main_class.as_ref().filter(|_| svc.kind == ServiceKind::GradleBoot);
-            if !jvm_args.is_empty() || boot_main.is_some() {
+            if !jvm_args.is_empty() || boot_main.is_some() || test_mode {
                 a.push("-I".into());
                 a.push(ctx.gradle_init_script.to_string_lossy().into_owned());
             }
@@ -276,17 +296,24 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
             if let Some(mc) = boot_main {
                 set_env(&mut env, MAIN_CLASS_ENV, mc);
             }
+            if test_mode {
+                set_env(&mut env, TEST_MODE_ENV, "1");
+            }
             let tasks: Vec<String> = if svc.kind == ServiceKind::GradleBoot {
                 vec!["bootRun".into()]
             } else {
-                let t = vars.expand_all(&g.tasks)?;
-                if t.iter().all(|t| t.trim().is_empty()) {
+                if gradle_tasks.iter().all(|t| t.trim().is_empty()) {
                     return Err("실행할 Gradle 태스크를 입력하세요 (예: run).".into());
                 }
-                t
+                gradle_tasks
             };
             for task in tasks.iter().filter(|t| !t.trim().is_empty()) {
-                a.push(qualify_gradle_task(project.as_deref(), task.trim()));
+                // --tests 같은 옵션과 그 값은 프로젝트 경로를 붙이지 않는다
+                if task.starts_with('-') || a.last().is_some_and(|prev| prev.starts_with("--") && !prev.contains('=') && takes_value(prev)) {
+                    a.push(task.trim().to_string());
+                } else {
+                    a.push(qualify_gradle_task(project.as_deref(), task.trim()));
+                }
             }
             let mut program_args: Vec<String> = profile_arg.into_iter().collect();
             program_args.extend(args);
@@ -297,7 +324,7 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
         }
         ServiceKind::MavenBoot | ServiceKind::Maven => {
             let m = svc.maven.clone().unwrap_or_default();
-            let mut a = vars.expand_all(&m.options)?;
+            let mut a: Vec<String> = vars.expand_all(&m.options)?.iter().map(|o| unquote(o)).collect();
             if svc.inject_utf8() {
                 add_build_tool_utf8(&mut env, "MAVEN_OPTS");
             }
@@ -323,7 +350,7 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
                     a.push(format!("-Dspring-boot.run.arguments={}", join_quoted(&args)));
                 }
             } else {
-                let goals = vars.expand_all(&m.goals)?;
+                let goals: Vec<String> = vars.expand_all(&m.goals)?.iter().map(|g| unquote(g)).collect();
                 if goals.iter().all(|g| g.trim().is_empty()) {
                     return Err("실행할 Maven 골을 입력하세요 (예: exec:java).".into());
                 }
@@ -550,6 +577,28 @@ fn exe_tool(dir: Option<&str>, name: &str) -> String {
         }
     }
     file
+}
+
+/// 값 하나를 감싼 따옴표를 벗긴다 (`"a.b.C"` → `a.b.C`). IntelliJ 구성은 목록 항목에도 셸식 따옴표를 남긴다.
+fn unquote(s: &str) -> String {
+    let t = s.trim();
+    for q in ['"', '\''] {
+        if t.len() >= 2 && t.starts_with(q) && t.ends_with(q) && !t[1..t.len() - 1].contains(q) {
+            return t[1..t.len() - 1].to_string();
+        }
+    }
+    t.to_string()
+}
+
+/// Gradle 테스트 태스크인지 (`test`, `:apps:x:test`, `integrationTest`)
+fn is_test_task(task: &str) -> bool {
+    let name = task.rsplit(':').next().unwrap_or(task);
+    !task.starts_with('-') && (name == "test" || name.ends_with("Test"))
+}
+
+/// 값을 다음 인자로 받는 Gradle 옵션
+fn takes_value(opt: &str) -> bool {
+    matches!(opt, "--tests" | "--project-dir" | "--init-script" | "--include-build" | "--exclude-task" | "--build-file" | "--settings-file" | "--console" | "--warning-mode" | "--priority")
 }
 
 fn qualify_gradle_task(project: Option<&str>, task: &str) -> String {
@@ -948,6 +997,35 @@ mod tests {
         let long = "x".repeat(500);
         let d = quote_display(&long);
         assert!(d.len() < 120 && d.ends_with("…(500자)"));
+    }
+
+    #[test]
+    fn gradle_test_task_like_intellij() {
+        let f = Fixture::new();
+        let mut s = no_inject(svc(ServiceKind::Gradle));
+        // IntelliJ 구성에서 가져온 값처럼 따옴표가 붙어 있어도 벗겨서 넘긴다
+        s.gradle = Some(GradleOpts {
+            tasks: vec![":apps:api:test".into(), "--tests".into(), "\"com.example.mig.MigrationTest\"".into()],
+            ..Default::default()
+        });
+        let spec = f.build(&s).unwrap();
+        let tail: Vec<&str> = spec.args.iter().rev().take(3).rev().map(String::as_str).collect();
+        assert_eq!(tail, [":apps:api:test", "--tests", "com.example.mig.MigrationTest"]);
+        assert!(spec.args.contains(&"-I".to_string()));
+        assert_eq!(spec.env.get(TEST_MODE_ENV).map(String::as_str), Some("1"));
+
+        // 프로젝트 경로가 있어도 --tests 값에는 붙이지 않는다
+        s.gradle = Some(GradleOpts { project: Some(":apps:api".into()), tasks: vec!["test".into(), "--tests".into(), "a.B".into()], ..Default::default() });
+        let spec = f.build(&s).unwrap();
+        assert!(spec.args.ends_with(&[":apps:api:test".to_string(), "--tests".into(), "a.B".into()]), "{:?}", spec.args);
+
+        // 테스트가 아닌 태스크는 테스트 모드가 아니다
+        s.gradle = Some(GradleOpts { tasks: vec!["build".into()], ..Default::default() });
+        let spec = f.build(&s).unwrap();
+        assert!(!spec.env.contains_key(TEST_MODE_ENV) && !spec.args.contains(&"-I".to_string()));
+        assert!(is_test_task("integrationTest") && is_test_task(":a:test") && !is_test_task("--tests") && !is_test_task("testClasses"));
+        assert_eq!(unquote("'x y'"), "x y");
+        assert_eq!(unquote("-Pa=\"b\""), "-Pa=\"b\"");
     }
 
     #[test]

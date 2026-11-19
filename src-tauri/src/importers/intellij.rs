@@ -385,7 +385,8 @@ fn jar(conf: Node, name: &str, project: &Project, ctx: &ScanContext) -> Converte
 }
 
 fn maven(conf: Node, name: &str, project: &Project, ctx: &ScanContext) -> Converted {
-    let goals = deep_list(conf, "goals");
+    // 목록 항목에도 셸식 따옴표·공백이 있을 수 있어 다시 나눈다 (예: "\"a.b.C\"")
+    let goals: Vec<String> = deep_list(conf, "goals").iter().flat_map(|g| split_args(g)).collect();
     if goals.is_empty() {
         return Converted::Skip("Maven 골 없음".into());
     }
@@ -423,7 +424,8 @@ fn maven(conf: Node, name: &str, project: &Project, ctx: &ScanContext) -> Conver
 }
 
 fn gradle(conf: Node, name: &str, project: &Project, ctx: &ScanContext) -> Converted {
-    let tasks = deep_list(conf, "taskNames");
+    // IntelliJ는 `--tests "a.b.C"`처럼 따옴표를 남겨 저장하고 실행할 때 벗긴다. 같은 방식으로 나눈다.
+    let tasks: Vec<String> = deep_list(conf, "taskNames").iter().flat_map(|t| split_args(t)).collect();
     if tasks.is_empty() {
         return Converted::Skip("Gradle 태스크 없음".into());
     }

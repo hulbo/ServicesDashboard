@@ -124,6 +124,8 @@ Gradle Wrapper(`gradlew.bat`)와 Maven Wrapper(`mvnw.cmd`)는 작업 디렉터�
 
 Gradle은 기본으로 `--no-daemon`으로 실행한다. 그래야 빌드 JVM과 앱이 모두 서비스의 프로세스 묶음(Job) 안에 들어가 중지할 때 바로 함께 종료된다. 설정에서 *데몬 재사용*을 켜면 시작이 빨라지지만, IntelliJ 등이 띄운 데몬에 붙으면 중지 후 앱 종료가 몇 초 늦을 수 있다.
 
+Gradle 테스트 구성(`test` 태스크나 `--tests` 필터가 있는 구성)은 IntelliJ처럼 동작한다. 소스가 그대로여도 매번 테스트를 다시 실행하고(UP-TO-DATE로 건너뛰지 않음), 테스트 안의 출력과 테스트별 결과(PASSED·FAILED, 실패 시 전체 스택트레이스)를 콘솔에 보여 준다. IntelliJ 구성에 남아 있는 `--tests "패키지.클래스"`의 따옴표는 가져올 때와 실행할 때 벗긴다.
+
 ## 설정 파일
 
 서비스 정의는 `%APPDATA%\ServicesDashboard\workspaces\default.json`에 JSON으로 저장된다. 화면에서 편집하는 것이 기본이고, [JSON Schema](schema/workspace.schema.json)가 있어 에디터 자동완성으로 직접 고칠 수도 있다 (고친 뒤 워크스페이스 설정의 **다시 불러오기**). 파일이 깨져 있으면 덮어쓰지 않고 오류를 보여 준다.
@@ -149,7 +151,7 @@ Gradle은 기본으로 `--no-daemon`으로 실행한다. 그래야 빌드 JVM과
 }
 ```
 
-전체 예시: [examples/workspace.example.json](examples/workspace.example.json). 환경변수 `SERVICES_DASHBOARD_HOME`을 지정하면 설정 폴더 위치를 바꿀 수 있다 (포터블 사용).
+전체 예시: [examples/workspace.example.json](examples/workspace.example.json). 환경변수 `SERVICES_DASHBOARD_HOME`을 지정하면 설정 폴더 위치를 바꿀 수 있다 (포터블 사용). 이렇게 띄운 앱은 설정이 겹치지 않으므로 기본 설치본과 동시에 실행할 수 있다.
 
 ## 개발
 

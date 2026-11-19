@@ -82,12 +82,15 @@ pub struct Store {
 
 impl Store {
     pub fn default_base_dir() -> PathBuf {
-        if let Ok(home) = std::env::var("SERVICES_DASHBOARD_HOME") {
-            if !home.trim().is_empty() {
-                return PathBuf::from(home);
-            }
+        match custom_base_dir() {
+            Some(home) => PathBuf::from(home),
+            None => dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("ServicesDashboard"),
         }
-        dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("ServicesDashboard")
+    }
+
+    /// SERVICES_DASHBOARD_HOME으로 설정 폴더를 따로 지정했는지
+    pub fn uses_custom_base_dir() -> bool {
+        custom_base_dir().is_some()
     }
 
     pub fn open(base_dir: PathBuf) -> Result<Self, String> {
@@ -172,6 +175,10 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, content).map_err(|e| format!("파일을 쓸 수 없습니다: {} ({e})", tmp.display()))?;
     fs::rename(&tmp, path).map_err(|e| format!("파일을 저장할 수 없습니다: {} ({e})", path.display()))
+}
+
+fn custom_base_dir() -> Option<String> {
+    std::env::var("SERVICES_DASHBOARD_HOME").ok().filter(|h| !h.trim().is_empty())
 }
 
 #[cfg(test)]

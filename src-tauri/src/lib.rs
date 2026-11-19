@@ -29,9 +29,13 @@ const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
-        // 두 번째로 실행하면 새 창 대신 이미 떠 있는 창을 앞으로 가져온다 (첫 번째로 등록해야 한다).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| shell::show_main(app)))
+    let mut builder = tauri::Builder::default();
+    // 두 번째로 실행하면 새 창 대신 이미 떠 있는 창을 앞으로 가져온다 (첫 번째로 등록해야 한다).
+    // SERVICES_DASHBOARD_HOME으로 설정 폴더를 따로 쓰는 실행(테스트·휴대용)은 설정이 겹치지 않으므로 따로 띄운다.
+    if !store::Store::uses_custom_base_dir() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| shell::show_main(app)));
+    }
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())

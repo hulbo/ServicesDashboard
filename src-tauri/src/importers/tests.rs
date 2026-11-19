@@ -388,6 +388,29 @@ fn vscode_launch_and_shared_file() {
 }
 
 #[test]
+fn gradle_test_config_strips_quotes() {
+    let f = gradle_fixture();
+    write(
+        &f.root,
+        ".run/mig.run.xml",
+        r#"<component name="ProjectRunConfigurationManager"><configuration name="dataMig" type="GradleRunConfiguration" factoryName="Gradle">
+  <ExternalSystemSettings>
+    <option name="env"><map><entry key="MIG_URL" value="jdbc:x" /></map></option>
+    <option name="externalProjectPath" value="$PROJECT_DIR$" />
+    <option name="taskNames"><list><option value=":apps:api:test" /><option value="--tests" /><option value="&quot;com.example.mig.MigrationTest&quot;" /></list></option>
+  </ExternalSystemSettings>
+  <RunAsTest>true</RunAsTest>
+</configuration></component>"#,
+    );
+    let r = f.scan();
+    let c = by_name(&r, "dataMig");
+    assert_eq!(c.service.kind, ServiceKind::Gradle);
+    assert_eq!(c.service.gradle.as_ref().unwrap().tasks, vec![":apps:api:test", "--tests", "com.example.mig.MigrationTest"]);
+    assert_eq!(c.service.env.get("MIG_URL").map(String::as_str), Some("jdbc:x"));
+    assert!(c.command.as_deref().unwrap().ends_with(":apps:api:test --tests com.example.mig.MigrationTest"), "{:?}", c.command);
+}
+
+#[test]
 fn non_boot_java_becomes_java_main() {
     let f = gradle_fixture();
     // 루트에서 Boot를 적용하지 않는 프로젝트로 바꾼다
