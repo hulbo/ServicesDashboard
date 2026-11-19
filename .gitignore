@@ -1,0 +1,27 @@
+# Node / frontend
+node_modules/
+dist/
+.svelte-kit/
+*.tsbuildinfo
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Logs
+*.log
+logs/
+
+# Local settings / secrets
+.env
+.env.*
+!.env.example
+*.local.json
+
+# IDE / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.iml
+.DS_Store
+Thumbs.db
