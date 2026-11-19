@@ -1,0 +1,170 @@
+:root {
+  color-scheme: dark;
+  --bg: #1e1f22;
+  --panel: #2b2d30;
+  --panel-2: #26282b;
+  --hover: #393b40;
+  --hover-strong: #43454a;
+  --border: #1e1f22;
+  --border-strong: #43454a;
+  --text: #dfe1e5;
+  --text-2: #c4c7cc;
+  --muted: #8c9097;
+  --faint: #6a6e75;
+  --accent: #3574f0;
+  --accent-text: #6f9ff8;
+  --sel: #2e436e;
+  --sel-inactive: #393b40;
+  --ok: #5fb865;
+  --ok-strong: #3b8a40;
+  --warn: #e2a53a;
+  --err: #f75464;
+  --idle: #6f737a;
+  --folder: #a8b0bd;
+  --input-bg: #1e1f22;
+  --input-border: #4e5157;
+
+  --console-bg: #1e1f22;
+  --console-fg: #bcbec4;
+  --console-err: #f2797f;
+  --console-sys: #6f9ff8;
+  --console-selection: #214283;
+
+  --ansi-0: #4a4d52;
+  --ansi-1: #f0524f;
+  --ansi-2: #5fb865;
+  --ansi-3: #d6a54a;
+  --ansi-4: #3993d4;
+  --ansi-5: #c77dbb;
+  --ansi-6: #2aacb8;
+  --ansi-7: #bcbec4;
+  --ansi-8: #6f737a;
+  --ansi-9: #ff6b68;
+  --ansi-10: #7ccf81;
+  --ansi-11: #f2c55c;
+  --ansi-12: #56a8f5;
+  --ansi-13: #e18fd6;
+  --ansi-14: #4fd1dc;
+  --ansi-15: #ffffff;
+
+  --font-ui: 'Pretendard', 'Malgun Gothic', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'D2Coding', 'Cascadia Mono', Consolas, 'Malgun Gothic', monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #ffffff;
+    --panel: #f7f8fa;
+    --panel-2: #f0f1f3;
+    --hover: #e8eaee;
+    --hover-strong: #dcdfe4;
+    --border: #e4e6ea;
+    --border-strong: #cfd2d8;
+    --text: #1f2023;
+    --text-2: #3a3c40;
+    --muted: #6c707e;
+    --faint: #9a9da6;
+    --accent: #3574f0;
+    --accent-text: #2a62d4;
+    --sel: #d4e2ff;
+    --sel-inactive: #e3e6eb;
+    --ok: #208a3c;
+    --ok-strong: #208a3c;
+    --warn: #b7791f;
+    --err: #d43b4b;
+    --idle: #a3a7b0;
+    --folder: #7b8494;
+    --input-bg: #ffffff;
+    --input-border: #c9ccd3;
+
+    --console-bg: #ffffff;
+    --console-fg: #2b2d30;
+    --console-err: #c4314b;
+    --console-sys: #2a62d4;
+    --console-selection: #b3d1ff;
+
+    --ansi-0: #000000;
+    --ansi-1: #c4314b;
+    --ansi-2: #208a3c;
+    --ansi-3: #9a6b00;
+    --ansi-4: #1a59c7;
+    --ansi-5: #a3389e;
+    --ansi-6: #0a7f8c;
+    --ansi-7: #5c5f66;
+    --ansi-8: #6c707e;
+    --ansi-9: #e0475a;
+    --ansi-10: #2ea84f;
+    --ansi-11: #b38600;
+    --ansi-12: #3574f0;
+    --ansi-13: #c04ebb;
+    --ansi-14: #12a3b3;
+    --ansi-15: #8c9097;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+button.primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}

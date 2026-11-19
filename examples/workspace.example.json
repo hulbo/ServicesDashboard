@@ -1,0 +1,84 @@
+{
+  "$schema": "https://raw.githubusercontent.com/hulbo/ServicesDashboard/main/schema/workspace.schema.json",
+  "name": "my-project",
+  "variables": {
+    "ROOT": "C:/Project/my-project"
+  },
+  "env": {
+    "FORCE_COLOR": "1"
+  },
+  "groups": [
+    { "id": "npm", "name": "npm" },
+    { "id": "server", "name": "server", "env": { "SPRING_PROFILES_ACTIVE": "local" } }
+  ],
+  "services": [
+    {
+      "id": "portal-front",
+      "name": "portal",
+      "group": "npm",
+      "type": "npm",
+      "cwd": "${var:ROOT}/front/portal",
+      "npm": { "script": "dev" },
+      "ports": [5173]
+    },
+    {
+      "id": "admin-front",
+      "name": "admin",
+      "group": "npm",
+      "type": "npm",
+      "cwd": "${var:ROOT}/front/admin",
+      "npm": { "script": "serve", "packageManager": "pnpm" },
+      "args": ["--port", "5175"],
+      "runtime": { "node": "C:/Program Files/nodejs" }
+    },
+    {
+      "id": "auth-api",
+      "name": "AuthApplication",
+      "group": "server",
+      "type": "gradle-boot",
+      "cwd": "${var:ROOT}",
+      "gradle": { "project": ":apps:auth" },
+      "runtime": { "jdk": "C:/Program Files/Java/jdk-17" },
+      "ports": [8081]
+    },
+    {
+      "id": "portal-api",
+      "name": "PortalApplication (local)",
+      "group": "server",
+      "type": "gradle-boot",
+      "cwd": "${var:ROOT}",
+      "gradle": { "project": ":apps:portal" },
+      "spring": { "profiles": ["local"] },
+      "jvmArgs": ["--add-opens", "java.base/java.lang=ALL-UNNAMED", "-Dfile.encoding=UTF-8"],
+      "args": ["--server.port=8080"],
+      "runtime": { "jdk": "C:/Program Files/Java/jdk-17" },
+      "ports": [8080]
+    },
+    {
+      "id": "batch-api",
+      "name": "BatchApplication",
+      "group": "server",
+      "type": "maven-boot",
+      "cwd": "${var:ROOT}/batch",
+      "maven": { "module": "batch-api" },
+      "spring": { "profiles": ["local"] },
+      "jvmArgs": ["-Xmx512m"]
+    },
+    {
+      "id": "legacy",
+      "name": "legacy-app",
+      "type": "jar",
+      "cwd": "${var:ROOT}/legacy",
+      "jar": { "path": "build/libs/legacy.jar" },
+      "runtime": { "jdk": "C:/Program Files/Java/jdk1.8.0_202" },
+      "encoding": "cp949"
+    },
+    {
+      "id": "redis",
+      "name": "redis (docker)",
+      "type": "shell",
+      "cwd": "${var:ROOT}",
+      "shell": { "command": "docker compose up redis" }
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hulbo/ServicesDashboard/main/schema/workspace.schema.json",
+  "title": "Services Dashboard 워크스페이스",
+  "description": "서비스 정의 파일. 기본 위치: %APPDATA%\\ServicesDashboard\\workspaces\\<이름>.json",
+  "type": "object",
+  "required": ["name"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": { "type": "string", "description": "워크스페이스 이름" },
+    "variables": {
+      "$ref": "#/$defs/envMap",
+      "description": "${var:NAME}으로 참조하는 변수. 다른 변수를 참조할 수 있다."
+    },
+    "env": { "$ref": "#/$defs/envMap", "description": "모든 서비스에 공통으로 적용되는 환경변수" },
+    "groups": { "type": "array", "items": { "$ref": "#/$defs/group" } },
+    "services": { "type": "array", "items": { "$ref": "#/$defs/service" } }
+  },
+  "$defs": {
+    "envMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "group": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "env": { "$ref": "#/$defs/envMap", "description": "그룹 안의 서비스에 적용되는 환경변수" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["id", "name", "type"],
+      "properties": {
+        "id": { "type": "string", "description": "고유 ID" },
+        "name": { "type": "string", "description": "트리에 표시할 이름" },
+        "group": { "type": "string", "description": "소속 그룹 ID" },
+        "type": {
+          "enum": ["npm", "node", "gradle-boot", "maven-boot", "java-main", "jar", "gradle", "maven", "shell"],
+          "description": "실행 타입. java-main은 M4에서 지원 예정"
+        },
+        "cwd": { "type": "string", "description": "작업 디렉터리. 변수 사용 가능 (예: ${var:ROOT}/front/portal)" },
+        "env": { "$ref": "#/$defs/envMap" },
+        "envFiles": { "$ref": "#/$defs/stringList", "description": ".env 형식 파일 경로 (작업 디렉터리 기준)" },
+        "jvmArgs": { "$ref": "#/$defs/stringList", "description": "VM 옵션" },
+        "args": { "$ref": "#/$defs/stringList", "description": "프로그램 인자" },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "jdk": { "type": "string", "description": "JDK 홈 경로 (이 서비스에만 JAVA_HOME으로 적용)" },
+            "node": { "type": "string", "description": "node.exe가 들어 있는 폴더" }
+          }
+        },
+        "spring": {
+          "type": "object",
+          "properties": {
+            "profiles": { "$ref": "#/$defs/stringList", "description": "활성 프로파일" }
+          }
+        },
+        "npm": {
+          "type": "object",
+          "properties": {
+            "script": { "type": "string", "description": "package.json scripts의 이름 (예: dev)" },
+            "packageManager": { "enum": ["npm", "yarn", "pnpm"] }
+          }
+        },
+        "node": {
+          "type": "object",
+          "properties": {
+            "entry": { "type": "string", "description": "실행할 스크립트 파일" },
+            "nodeArgs": { "$ref": "#/$defs/stringList" }
+          }
+        },
+        "gradle": {
+          "type": "object",
+          "properties": {
+            "project": { "type": "string", "description": "Gradle 프로젝트 경로 (예: :apps:portal)" },
+            "tasks": { "$ref": "#/$defs/stringList", "description": "gradle 타입에서 실행할 태스크" },
+            "options": { "$ref": "#/$defs/stringList", "description": "추가 Gradle 옵션" }
+          }
+        },
+        "maven": {
+          "type": "object",
+          "properties": {
+            "module": { "type": "string", "description": "-pl 에 넘길 모듈" },
+            "goals": { "$ref": "#/$defs/stringList", "description": "maven 타입에서 실행할 골" },
+            "options": { "$ref": "#/$defs/stringList", "description": "추가 Maven 옵션" }
+          }
+        },
+        "jar": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string", "description": "실행할 jar 경로" }
+          }
+        },
+        "shell": {
+          "type": "object",
+          "properties": {
+            "command": { "type": "string" },
+            "shell": { "enum": ["cmd", "powershell", "pwsh", "bash"] }
+          }
+        },
+        "ports": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        },
+        "encoding": {
+          "enum": ["auto", "utf-8", "cp949"],
+          "description": "콘솔 출력 인코딩. auto는 줄마다 UTF-8을 시도하고 실패하면 CP949로 해석"
+        },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

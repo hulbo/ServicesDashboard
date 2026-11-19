@@ -1,0 +1,366 @@
+// 앱 전역 상태 (Svelte 5 runes)
+
+import { createBackend, errorMessage, type Backend } from './api'
+import { LogStore } from './logstore'
+import type { AppInfo, Group, LogBatch, Service, ServiceStatus, Workspace } from './types'
+import { isActive } from './types'
+
+export type Selection = { kind: 'service' | 'group'; id: string } | { kind: 'workspace' }
+export type DetailTab = 'console' | 'settings'
+
+export interface Toast {
+  id: number
+  kind: 'info' | 'success' | 'error'
+  text: string
+}
+
+const COLLAPSE_KEY = 'sd.collapsed'
+const SIDEBAR_KEY = 'sd.sidebarWidth'
+
+function readLocal<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeLocal(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // 저장 공간을 쓸 수 없으면 무시 (화면 편의 기능일 뿐이다)
+  }
+}
+
+export function newId(prefix: string): string {
+  const rand = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10)
+  return `${prefix}-${rand}`
+}
+
+class AppState {
+  backend!: Backend
+  ready = $state(false)
+  loadError = $state<string | null>(null)
+  info = $state<AppInfo | null>(null)
+  workspace = $state<Workspace>({ name: '', groups: [], services: [] })
+  workspacePath = $state('')
+  statuses = $state<Record<string, ServiceStatus>>({})
+  selection = $state<Selection | null>(null)
+  tab = $state<DetailTab>('console')
+  collapsed = $state<Record<string, boolean>>(readLocal(COLLAPSE_KEY, {}))
+  sidebarWidth = $state<number>(readLocal(SIDEBAR_KEY, 300))
+  renaming = $state<string | null>(null)
+  toasts = $state<Toast[]>([])
+  /** 서비스별 로그 변경 카운터. ConsoleView가 이 값을 보고 다시 그린다. */
+  logTick = $state<Record<string, number>>({})
+  /** 1초마다 갱신되는 현재 시각 (실행 시간 표시용) */
+  now = $state(Date.now())
+
+  private logStores = new Map<string, LogStore>()
+  private logsLoaded = new Set<string>()
+  private toastSeq = 1
+
+  selectedService = $derived.by(() => {
+    const sel = this.selection
+    return sel?.kind === 'service' ? this.workspace.services.find((s) => s.id === sel.id) : undefined
+  })
+
+  selectedGroup = $derived.by(() => {
+    const sel = this.selection
+    return sel?.kind === 'group' ? this.workspace.groups.find((g) => g.id === sel.id) : undefined
+  })
+
+  runningCount = $derived(Object.values(this.statuses).filter((s) => isActive(s.state) && this.workspace.services.some((x) => x.id === s.id)).length)
+
+  async init() {
+    this.backend = await createBackend()
+    await this.backend.onState((s) => this.applyStatus(s))
+    await this.backend.onLogs((batches) => this.applyLogs(batches))
+    setInterval(() => {
+      if (this.runningCount > 0) this.now = Date.now()
+    }, 1000)
+    try {
+      this.info = await this.backend.appInfo()
+    } catch (e) {
+      this.toast('error', errorMessage(e))
+    }
+    await this.loadWorkspace(false)
+    for (const s of await this.backend.statuses()) this.applyStatus(s)
+    this.ready = true
+  }
+
+  async loadWorkspace(reload: boolean) {
+    try {
+      const info = reload ? await this.backend.reloadWorkspace() : await this.backend.getWorkspace()
+      this.workspace = info.workspace
+      this.workspacePath = info.path
+      this.loadError = null
+      if (this.selection && this.selection.kind !== 'workspace') {
+        const id = this.selection.id
+        const exists = this.selection.kind === 'service' ? info.workspace.services.some((s) => s.id === id) : info.workspace.groups.some((g) => g.id === id)
+        if (!exists) this.selection = null
+      }
+      if (!this.selection && info.workspace.services.length) {
+        this.selection = { kind: 'service', id: info.workspace.services[0].id }
+      }
+    } catch (e) {
+      this.loadError = errorMessage(e)
+    }
+  }
+
+  // ---------- 상태·로그 ----------
+
+  private applyStatus(s: ServiceStatus) {
+    this.statuses[s.id] = s
+    this.now = Date.now()
+  }
+
+  private applyLogs(batches: LogBatch[]) {
+    for (const b of batches) {
+      const added = this.logStore(b.id).append(b.lines)
+      if (added) this.logTick[b.id] = (this.logTick[b.id] ?? 0) + 1
+    }
+  }
+
+  logStore(id: string): LogStore {
+    let store = this.logStores.get(id)
+    if (!store) {
+      store = new LogStore()
+      this.logStores.set(id, store)
+    }
+    return store
+  }
+
+  /** 화면을 새로 고친 경우 등을 대비해 처음 볼 때 백엔드 버퍼를 한 번 받아 온다. */
+  async ensureLogs(id: string) {
+    if (this.logsLoaded.has(id)) return
+    this.logsLoaded.add(id)
+    try {
+      const lines = await this.backend.getLogs(id)
+      this.logStore(id).reset(lines)
+      this.logTick[id] = (this.logTick[id] ?? 0) + 1
+    } catch (e) {
+      this.logsLoaded.delete(id)
+      this.toast('error', errorMessage(e))
+    }
+  }
+
+  async clearLogs(id: string) {
+    await this.backend.clearLogs(id)
+    this.logStore(id).clear()
+    this.logTick[id] = (this.logTick[id] ?? 0) + 1
+  }
+
+  status(id: string): ServiceStatus | undefined {
+    return this.statuses[id]
+  }
+
+  // ---------- 실행 제어 ----------
+
+  private async run(label: string, fn: () => Promise<unknown>) {
+    try {
+      await fn()
+    } catch (e) {
+      this.toast('error', `${label}: ${errorMessage(e)}`)
+    }
+  }
+
+  serviceName(id: string): string {
+    return this.workspace.services.find((s) => s.id === id)?.name ?? id
+  }
+
+  start(id: string) {
+    return this.run(`${this.serviceName(id)} 시작 실패`, () => this.backend.start(id))
+  }
+
+  stop(id: string) {
+    return this.run(`${this.serviceName(id)} 중지 실패`, () => this.backend.stop(id))
+  }
+
+  restart(id: string) {
+    return this.run(`${this.serviceName(id)} 재시작 실패`, () => this.backend.restart(id))
+  }
+
+  toggle(id: string) {
+    return isActive(this.statuses[id]?.state) ? this.stop(id) : this.start(id)
+  }
+
+  startGroup(id: string) {
+    return this.run('그룹 시작 실패', async () => {
+      const errors = await this.backend.startGroup(id)
+      for (const e of errors) this.toast('error', `${e.name} 시작 실패: ${e.error}`)
+    })
+  }
+
+  stopGroup(id: string) {
+    return this.run('그룹 중지 실패', () => this.backend.stopGroup(id))
+  }
+
+  stopAll() {
+    return this.run('전체 중지 실패', () => this.backend.stopAll())
+  }
+
+  // ---------- 워크스페이스 편집 ----------
+
+  /** 사본을 고쳐 저장하고, 저장된 결과로 상태를 바꾼다. */
+  async mutate(fn: (ws: Workspace) => void): Promise<boolean> {
+    const draft = $state.snapshot(this.workspace) as Workspace
+    fn(draft)
+    try {
+      this.workspace = await this.backend.saveWorkspace(draft)
+      return true
+    } catch (e) {
+      this.toast('error', `저장 실패: ${errorMessage(e)}`)
+      return false
+    }
+  }
+
+  async addService(groupId?: string) {
+    const id = newId('svc')
+    const ok = await this.mutate((ws) => {
+      ws.services.push({ id, name: '새 서비스', type: 'npm', group: groupId, npm: { script: 'dev' } })
+    })
+    if (ok) {
+      this.select({ kind: 'service', id })
+      this.tab = 'settings'
+      if (groupId) this.collapsed[groupId] = false
+    }
+  }
+
+  async addGroup() {
+    const id = newId('grp')
+    const ok = await this.mutate((ws) => {
+      ws.groups.push({ id, name: '새 그룹' })
+    })
+    if (ok) {
+      this.select({ kind: 'group', id })
+      this.renaming = id
+    }
+  }
+
+  async updateService(svc: Service) {
+    return this.mutate((ws) => {
+      const i = ws.services.findIndex((s) => s.id === svc.id)
+      if (i >= 0) ws.services[i] = svc
+    })
+  }
+
+  async updateGroup(group: Group) {
+    return this.mutate((ws) => {
+      const i = ws.groups.findIndex((g) => g.id === group.id)
+      if (i >= 0) ws.groups[i] = group
+    })
+  }
+
+  async rename(id: string, name: string) {
+    const trimmed = name.trim()
+    this.renaming = null
+    if (!trimmed) return
+    await this.mutate((ws) => {
+      const s = ws.services.find((x) => x.id === id)
+      if (s) s.name = trimmed
+      const g = ws.groups.find((x) => x.id === id)
+      if (g) g.name = trimmed
+    })
+  }
+
+  async duplicateService(id: string) {
+    const src = this.workspace.services.find((s) => s.id === id)
+    if (!src) return
+    const copy = { ...($state.snapshot(src) as Service), id: newId('svc'), name: `${src.name} 복사본` } as Service
+    delete (copy as Record<string, unknown>).source
+    const ok = await this.mutate((ws) => {
+      const i = ws.services.findIndex((s) => s.id === id)
+      ws.services.splice(i + 1, 0, copy)
+    })
+    if (ok) this.select({ kind: 'service', id: copy.id })
+  }
+
+  async deleteService(id: string) {
+    const name = this.serviceName(id)
+    const running = isActive(this.statuses[id]?.state)
+    const msg = running ? `'${name}'이(가) 실행 중입니다. 중지하고 삭제할까요?` : `'${name}' 서비스를 삭제할까요?`
+    if (!(await this.backend.confirm(msg, '서비스 삭제'))) return
+    if (running) await this.stop(id)
+    const ok = await this.mutate((ws) => {
+      ws.services = ws.services.filter((s) => s.id !== id)
+    })
+    if (ok && this.selection?.kind === 'service' && this.selection.id === id) this.selection = null
+  }
+
+  async deleteGroup(id: string) {
+    const group = this.workspace.groups.find((g) => g.id === id)
+    if (!group) return
+    const count = this.workspace.services.filter((s) => s.group === id).length
+    const msg = count
+      ? `'${group.name}' 그룹을 삭제할까요? 그룹 안의 서비스 ${count}개는 그룹 없음으로 옮겨집니다.`
+      : `'${group.name}' 그룹을 삭제할까요?`
+    if (!(await this.backend.confirm(msg, '그룹 삭제'))) return
+    const ok = await this.mutate((ws) => {
+      ws.groups = ws.groups.filter((g) => g.id !== id)
+      for (const s of ws.services) if (s.group === id) delete s.group
+    })
+    if (ok && this.selection?.kind === 'group' && this.selection.id === id) this.selection = null
+  }
+
+  /** 서비스를 다른 서비스 앞(beforeId) 또는 그룹 끝으로 옮긴다. groupId가 null이면 그룹 없음. */
+  async moveService(id: string, groupId: string | null, beforeId?: string) {
+    if (id === beforeId) return
+    await this.mutate((ws) => {
+      const i = ws.services.findIndex((s) => s.id === id)
+      if (i < 0) return
+      const [svc] = ws.services.splice(i, 1)
+      if (groupId) svc.group = groupId
+      else delete svc.group
+      let at = beforeId ? ws.services.findIndex((s) => s.id === beforeId) : -1
+      if (at < 0) {
+        // 그룹의 마지막 서비스 뒤에 넣는다
+        const lastInGroup = ws.services.map((s) => s.group ?? null).lastIndexOf(groupId)
+        at = lastInGroup >= 0 ? lastInGroup + 1 : ws.services.length
+      }
+      ws.services.splice(at, 0, svc)
+    })
+  }
+
+  async moveGroup(id: string, beforeId?: string) {
+    if (id === beforeId) return
+    await this.mutate((ws) => {
+      const i = ws.groups.findIndex((g) => g.id === id)
+      if (i < 0) return
+      const [g] = ws.groups.splice(i, 1)
+      const at = beforeId ? ws.groups.findIndex((x) => x.id === beforeId) : -1
+      ws.groups.splice(at < 0 ? ws.groups.length : at, 0, g)
+    })
+  }
+
+  // ---------- 화면 ----------
+
+  select(sel: Selection | null) {
+    this.selection = sel
+    if (sel?.kind === 'service') void this.ensureLogs(sel.id)
+  }
+
+  toggleCollapsed(groupId: string) {
+    this.collapsed[groupId] = !this.collapsed[groupId]
+    writeLocal(COLLAPSE_KEY, $state.snapshot(this.collapsed))
+  }
+
+  setSidebarWidth(w: number) {
+    this.sidebarWidth = Math.round(Math.min(600, Math.max(200, w)))
+    writeLocal(SIDEBAR_KEY, this.sidebarWidth)
+  }
+
+  toast(kind: Toast['kind'], text: string) {
+    const id = this.toastSeq++
+    this.toasts.push({ id, kind, text })
+    setTimeout(() => this.dismiss(id), kind === 'error' ? 8000 : 4000)
+  }
+
+  dismiss(id: number) {
+    this.toasts = this.toasts.filter((t) => t.id !== id)
+  }
+}
+
+export const app = new AppState()
