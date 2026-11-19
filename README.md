@@ -77,7 +77,9 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 
 ## 설치
 
-GitHub Actions가 `main`에 올라올 때마다 Windows 설치본(NSIS)을 만든다. [Actions](https://github.com/hulbo/ServicesDashboard/actions) 탭의 최신 `build` 실행에서 `services-dashboard-windows` 아티팩트를 받아 설치한다.
+[Releases](https://github.com/hulbo/ServicesDashboard/releases/latest)에서 `ServicesDashboard_<버전>_x64-setup.exe`를 받아 실행한다 (Windows 10/11 x64, 약 2.6MB). 코드 서명이 없는 설치본이라 SmartScreen이 경고하면 **추가 정보 → 실행**을 누른다.
+
+`main`의 최신 빌드는 [Actions](https://github.com/hulbo/ServicesDashboard/actions) 탭의 최신 `build` 실행에서 `services-dashboard-windows` 아티팩트로도 받을 수 있다.
 
 직접 빌드하려면 아래 [개발](#개발)을 본다.
 
