@@ -1,12 +1,12 @@
 // 앱 전역 상태 (Svelte 5 runes)
 
 import { createBackend, errorMessage, type Backend } from './api'
-import { applyImport, type ImportItem } from './importing'
+import { applyImport, type ImportItem, type PresetItem } from './importing'
 import { LogStore } from './logstore'
-import type { AppInfo, AppSettings, Group, LogBatch, PortOwner, RuntimeInfo, ScanResult, Service, ServiceStatus, Workspace } from './types'
+import type { AppInfo, AppSettings, Group, LogBatch, PortOwner, Preset, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
 import { isActive } from './types'
 
-export type Selection = { kind: 'service' | 'group'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' | 'settings' }
+export type Selection = { kind: 'service' | 'group' | 'preset'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' | 'settings' }
 
 /** 시작하려는데 포트가 점유된 경우 보여 줄 대화상자 내용 */
 export interface PortConflict {
@@ -85,12 +85,18 @@ class AppState {
     return sel?.kind === 'group' ? this.workspace.groups.find((g) => g.id === sel.id) : undefined
   })
 
+  selectedPreset = $derived.by(() => {
+    const sel = this.selection
+    return sel?.kind === 'preset' ? (this.workspace.presets ?? []).find((p) => p.id === sel.id) : undefined
+  })
+
   runningCount = $derived(Object.values(this.statuses).filter((s) => isActive(s.state) && this.workspace.services.some((x) => x.id === s.id)).length)
 
   async init() {
     this.backend = await createBackend()
     await this.backend.onState((s) => this.applyStatus(s))
     await this.backend.onLogs((batches) => this.applyLogs(batches))
+    await this.backend.onStartError((e) => void this.handleStartError(e))
     setInterval(() => {
       if (this.runningCount > 0) this.now = Date.now()
     }, 1000)
@@ -139,7 +145,12 @@ class AppState {
       this.loadError = null
       if (this.selection && 'id' in this.selection) {
         const id = this.selection.id
-        const exists = this.selection.kind === 'service' ? info.workspace.services.some((s) => s.id === id) : info.workspace.groups.some((g) => g.id === id)
+        const exists =
+          this.selection.kind === 'service'
+            ? info.workspace.services.some((s) => s.id === id)
+            : this.selection.kind === 'preset'
+              ? (info.workspace.presets ?? []).some((p) => p.id === id)
+              : info.workspace.groups.some((g) => g.id === id)
         if (!exists) this.selection = null
       }
       if (!this.selection && info.workspace.services.length) {
@@ -228,8 +239,20 @@ class AppState {
     }
   }
 
-  start(id: string) {
-    return this.startOrConflict(id, () => this.backend.start(id), '시작')
+  start(id: string, debug = false) {
+    return this.startOrConflict(id, () => this.backend.start(id, debug), debug ? '디버그 시작' : '시작')
+  }
+
+  /** 백그라운드 시작(의존 순서·그룹·프리셋·자동 재시작)에서 온 실패 */
+  private async handleStartError(e: StartError) {
+    if (e.error.startsWith('포트가 이미 사용 중') && !this.conflict) {
+      const owners = await this.backend.portsCheck(e.id).catch(() => [] as PortOwner[])
+      if (owners.length) {
+        this.conflict = { id: e.id, owners }
+        return
+      }
+    }
+    this.toast('error', `${e.name} 시작 실패: ${e.error}`)
   }
 
   /** 충돌 대화상자에서 '종료하고 시작'을 눌렀을 때 */
@@ -255,8 +278,8 @@ class AppState {
     return this.run(`${this.serviceName(id)} 중지 실패`, () => this.backend.stop(id))
   }
 
-  restart(id: string) {
-    return this.startOrConflict(id, () => this.backend.restart(id), '재시작')
+  restart(id: string, debug = false) {
+    return this.startOrConflict(id, () => this.backend.restart(id, debug), '재시작')
   }
 
   toggle(id: string) {
@@ -264,10 +287,52 @@ class AppState {
   }
 
   startGroup(id: string) {
-    return this.run('그룹 시작 실패', async () => {
-      const errors = await this.backend.startGroup(id)
-      for (const e of errors) this.toast('error', `${e.name} 시작 실패: ${e.error}`)
+    return this.run('그룹 시작 실패', () => this.backend.startGroup(id))
+  }
+
+  startPreset(id: string) {
+    return this.run('프리셋 시작 실패', () => this.backend.startPreset(id))
+  }
+
+  stopPreset(id: string) {
+    return this.run('프리셋 중지 실패', () => this.backend.stopPreset(id))
+  }
+
+  async addPreset(services: string[] = []) {
+    const id = newId('pre')
+    const ok = await this.mutate((ws) => {
+      ws.presets = [...(ws.presets ?? []), { id, name: '새 프리셋', services }]
     })
+    if (ok) {
+      this.select({ kind: 'preset', id })
+      this.renaming = id
+    }
+  }
+
+  async updatePreset(preset: Preset) {
+    return this.mutate((ws) => {
+      ws.presets = (ws.presets ?? []).map((p) => (p.id === preset.id ? preset : p))
+    })
+  }
+
+  async deletePreset(id: string) {
+    const p = (this.workspace.presets ?? []).find((x) => x.id === id)
+    if (!p || !(await this.backend.confirm(`'${p.name}' 프리셋을 삭제할까요? (서비스는 지워지지 않습니다)`, '프리셋 삭제'))) return
+    const ok = await this.mutate((ws) => {
+      ws.presets = (ws.presets ?? []).filter((x) => x.id !== id)
+    })
+    if (ok && this.selection?.kind === 'preset' && this.selection.id === id) this.selection = null
+  }
+
+  async exportProject(root: string) {
+    try {
+      const path = await this.backend.projectExport(root)
+      this.toast('success', `공유 파일을 만들었습니다: ${path}`)
+      return true
+    } catch (e) {
+      this.toast('error', `내보내기 실패: ${errorMessage(e)}`)
+      return false
+    }
   }
 
   stopGroup(id: string) {
@@ -339,6 +404,8 @@ class AppState {
       if (s) s.name = trimmed
       const g = ws.groups.find((x) => x.id === id)
       if (g) g.name = trimmed
+      const p = (ws.presets ?? []).find((x) => x.id === id)
+      if (p) p.name = trimmed
     })
   }
 
@@ -362,6 +429,9 @@ class AppState {
     if (running) await this.stop(id)
     const ok = await this.mutate((ws) => {
       ws.services = ws.services.filter((s) => s.id !== id)
+      // 다른 서비스의 의존 대상·프리셋에서도 뺀다
+      for (const s of ws.services) if (s.dependsOn) s.dependsOn = s.dependsOn.filter((d) => d !== id)
+      for (const p of ws.presets ?? []) p.services = p.services.filter((x) => x !== id)
     })
     if (ok && this.selection?.kind === 'service' && this.selection.id === id) this.selection = null
   }
@@ -414,15 +484,16 @@ class AppState {
   // ---------- 가져오기 ----------
 
   /** 스캔 결과에서 고른 후보를 워크스페이스에 넣는다. */
-  async importItems(scan: ScanResult, items: ImportItem[], varName: string | null) {
-    let outcome = { added: [] as string[], updated: [] as string[] }
+  async importItems(scan: ScanResult, items: ImportItem[], varName: string | null, presetItems: PresetItem[] = []) {
+    let outcome = { added: [] as string[], updated: [] as string[], presets: [] as string[] }
     const ok = await this.mutate((ws) => {
-      outcome = applyImport(ws, scan, items, varName, newId)
+      outcome = applyImport(ws, scan, items, varName, newId, presetItems)
     })
     if (!ok) return false
     const parts = []
     if (outcome.added.length) parts.push(`${outcome.added.length}개 추가`)
     if (outcome.updated.length) parts.push(`${outcome.updated.length}개 갱신`)
+    if (outcome.presets.length) parts.push(`프리셋 ${outcome.presets.length}개`)
     this.toast('success', `서비스를 가져왔습니다 (${parts.join(', ') || '변경 없음'}).`)
     const first = outcome.added[0] ?? outcome.updated[0]
     if (first) {

@@ -24,10 +24,15 @@ export interface Backend {
   reloadWorkspace(): Promise<WorkspaceInfo>
   saveWorkspace(ws: Workspace): Promise<Workspace>
   statuses(): Promise<ServiceStatus[]>
-  start(id: string): Promise<ServiceStatus>
+  /** 의존 순서대로 시작한다 (바로 돌아오고, 실패는 onStartError로 온다) */
+  start(id: string, debug?: boolean): Promise<void>
   stop(id: string): Promise<void>
-  restart(id: string): Promise<ServiceStatus>
-  startGroup(id: string): Promise<StartError[]>
+  restart(id: string, debug?: boolean): Promise<void>
+  startGroup(id: string): Promise<void>
+  startPreset(id: string): Promise<void>
+  stopPreset(id: string): Promise<void>
+  projectExport(root: string): Promise<string>
+  onStartError(cb: (e: StartError) => void): Promise<() => void>
   stopGroup(id: string): Promise<void>
   stopAll(): Promise<void>
   getLogs(id: string): Promise<LogLine[]>
@@ -77,10 +82,14 @@ async function createTauriBackend(): Promise<Backend> {
     reloadWorkspace: () => call('workspace_reload'),
     saveWorkspace: (workspace) => call('workspace_save', { workspace }),
     statuses: () => call('service_statuses'),
-    start: (id) => call('service_start', { id }),
+    start: (id, debug) => call('service_start', { id, debug: !!debug }),
     stop: (id) => call('service_stop', { id }),
-    restart: (id) => call('service_restart', { id }),
+    restart: (id, debug) => call('service_restart', { id, debug: !!debug }),
     startGroup: (id) => call('group_start', { id }),
+    startPreset: (id) => call('preset_start', { id }),
+    stopPreset: (id) => call('preset_stop', { id }),
+    projectExport: (root) => call('project_export', { root }),
+    onStartError: (cb) => listen<StartError>('service://start-error', (e) => cb(e.payload)),
     stopGroup: (id) => call('group_stop', { id }),
     stopAll: () => call('stop_all'),
     getLogs: (id) => call('logs_get', { id }),

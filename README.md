@@ -4,7 +4,7 @@ IntelliJ를 켜지 않고 로컬 개발 서비스를 띄우는 **가벼운 데�
 
 Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스를 한 화면에서 실행·중지·재시작하고, 서비스마다 콘솔 로그를 본다. IntelliJ의 Services 탭처럼 **왼쪽에는 서비스 트리, 오른쪽에는 콘솔 로그**를 둔다.
 
-> **현재 상태: M3 완료.** 서비스 실행·로그(M1), 설정 가져오기·런타임 감지(M2)에 더해 로그 검색·필터, 준비 감지, 포트 충돌 처리, 트레이 상주·알림, 로그 파일 저장이 된다. 의존 순서 실행·프리셋·자동 재시작은 M4에서 추가한다. 전체 계획은 [docs/PLANNING.md](docs/PLANNING.md)에 있다.
+> **현재 상태: M4 완료 (기획한 기능 전체).** 서비스 실행·로그(M1), 설정 가져오기·런타임 감지(M2), 로그 검색·준비 감지·포트 충돌·트레이(M3)에 더해 의존 순서 실행, 실행 프리셋, 자동 재시작, 디버그 모드, java-main 빠른 기동, VS Code 가져오기, 통합 로그, 프로젝트 공유 파일이 된다. 전체 계획은 [docs/PLANNING.md](docs/PLANNING.md)에 있다.
 
 ## 왜 만드나
 
@@ -43,6 +43,13 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | **포트·URL 감지 (M3)** | 로그의 `http://localhost:5173/`, `Tomcat started on port 8080 … context path '/api'` 등에서 주소를 찾아 헤더·트리에 표시하고 클릭하면 브라우저로 염 |
 | **포트 충돌 처리 (M3)** | 시작 전에 설정한 포트와 지난번에 감지한 포트를 다른 프로세스가 쓰는지 확인. 점유 프로세스(이름·PID, 또는 대시보드 서비스)를 보여 주고 *종료하고 시작* 제공 |
 | **트레이·알림 (M3)** | 창을 닫으면 트레이로 내려가 서비스가 계속 실행됨. 트레이 메뉴에서 그룹별 시작·중지, 전체 중지, 종료. 비정상 종료와 (창을 보고 있지 않을 때) 준비 완료를 Windows 알림으로 알림. 앱을 다시 실행하면 새로 뜨지 않고 기존 창이 나타남 |
+| **의존 순서 실행 (M4)** | 서비스마다 의존 서비스를 고르면, 시작할 때 의존 대상을 먼저 띄우고 준비될 때까지 '대기 중'으로 기다렸다가 시작. 의존 대상이 실패하면 시작하지 않고 이유를 알림. 순환 의존은 저장할 때 막음 |
+| **실행 프리셋 (M4)** | 그룹과 상관없이 고른 서비스 묶음을 한 번에 시작·중지 (트리 맨 위, 트레이 메뉴). IntelliJ Compound·VS Code compounds를 프리셋으로 가져옴 |
+| **자동 재시작 (M4)** | 비정상 종료되면 N회까지 점점 늘어나는 간격으로 다시 시작 (1분 넘게 실행되면 횟수 초기화) |
+| **디버그 모드 (M4)** | *디버그로 시작*(Shift+F9): Java는 JDWP(`127.0.0.1:5005`), Node는 `--inspect`(`9229`)를 붙여 실행. IDE에서 Remote JVM Debug·Attach로 연결 |
+| **java-main 빠른 기동 (M4)** | 메인 클래스를 java로 직접 실행. 처음엔 Gradle/Maven으로 컴파일·클래스패스를 계산해 캐시하고, 바뀐 소스가 없으면 다음부터 빌드 도구 없이 바로 뜸 |
+| **통합 로그 (M4)** | 그룹·프리셋의 여러 서비스 로그를 시간순으로 한 화면에 (서비스 이름 색 구분, 필터, 서비스별 숨기기) |
+| **VS Code·공유 파일 (M4)** | `.vscode/launch.json`(node, npm, node-terminal, java, compounds) 가져오기. 워크스페이스 설정에서 서비스를 프로젝트 폴더의 `services-dashboard.json`(경로는 `${projectDir}`)으로 내보내 팀과 공유 |
 | **로그 파일 (M3)** | 설정에서 켜면 `설정 폴더\logs\<서비스 ID>\YYYY-MM-DD.log`에 저장, 보관 기간이 지나면 삭제 |
 | 한글 로그 | 출력 인코딩 자동 판별(UTF-8 → 실패 시 CP949), 서비스별 고정 가능 |
 | 설정 폼 | 타입별 입력 항목, 환경변수 편집(비밀번호류 값 가림), env 파일, 프로파일, VM 옵션, 인자, 포트, 메모, **실행 명령 미리보기**, 저장(Ctrl+S)·저장 후 재시작 |
@@ -59,6 +66,7 @@ Node(npm), Spring Boot(Gradle / Maven), jar, 임의 명령으로 된 서비스�
 | 동작 | 키 |
 |---|---|
 | 선택한 서비스 시작 | `Shift+F10` (트리에서 더블클릭 또는 `Enter`도 가능) |
+| 디버그로 시작 | `Shift+F9` |
 | 중지 | `Ctrl+F2` |
 | 재시작 | `Ctrl+F5` |
 | 서비스 검색 | `Ctrl+K` |
@@ -83,12 +91,14 @@ GitHub Actions가 `main`에 올라올 때마다 Windows 설치본(NSIS)을 만�
 
 | IntelliJ 구성 | 변환 결과 |
 |---|---|
-| Spring Boot, Application | Gradle 프로젝트면 `gradle-boot`(모듈 → `:apps:portal`), Maven이면 `maven-boot`(artifactId → `-pl` 모듈). 메인 클래스·프로파일·VM 옵션·인자·환경변수·*구성 속성 재정의* 포함 |
+| Spring Boot, Application | Gradle 프로젝트면 `gradle-boot`(모듈 → `:apps:portal`), Maven이면 `maven-boot`(artifactId → `-pl` 모듈). Spring Boot가 아닌 모듈은 `java-main`. 메인 클래스·프로파일·VM 옵션·인자·환경변수·*구성 속성 재정의* 포함 |
 | npm | `npm` (package.json 위치, 스크립트, 인자, 패키지 매니저, 프로젝트 Node 인터프리터) |
 | Node.js, Jar, Maven, Gradle, Shell Script | `node`, `jar`, `maven`/`maven-boot`, `gradle`/`gradle-boot`, `shell` |
 | 폴더(`folderName`) | 그룹 |
 | 프로젝트 SDK·대체 JRE | IntelliJ JDK 목록이나 감지된 JDK에서 실제 경로를 찾아 지정 |
-| 복합(Compound) | 아직 지원하지 않음 (M4 실행 프리셋) |
+| 복합(Compound) | 실행 프리셋 |
+
+VS Code `.vscode/launch.json`과 프로젝트의 `services-dashboard.json`(공유 파일)도 같은 화면에서 함께 찾는다. 공유 파일이 있으면 그것을 기본으로 고른다.
 
 ### 직접 추가
 
@@ -105,6 +115,7 @@ GitHub Actions가 `main`에 올라올 때마다 Windows 설치본(NSIS)을 만�
 | `gradle-boot` | `gradlew.bat --console=plain -I <init script> :apps:portal:bootRun "--args=--spring.profiles.active=local --server.port=8081"` |
 | `maven-boot` | `mvn.cmd -pl portal spring-boot:run -Dspring-boot.run.profiles=local -Dspring-boot.run.jvmArguments=...` |
 | `jar` | `<JDK>\bin\java.exe <VM 옵션> -jar app.jar <인자>` |
+| `java-main` | `<JDK>\bin\java.exe <VM 옵션> -cp <캐시된 클래스패스> <메인 클래스> <인자>` (클래스패스가 길면 `@argfile`) |
 | `shell` (cmd) | `cmd.exe /d /s /c "<명령>"` |
 
 Gradle Wrapper(`gradlew.bat`)와 Maven Wrapper(`mvnw.cmd`)는 작업 디렉터리와 상위 폴더에서 찾아 우선 사용한다.
@@ -181,6 +192,8 @@ src-tauri/src/             백엔드 (Rust, Tauri 2)
   ports.rs                 포트 점유 프로세스 조회와 종료
   logfile.rs               로그 파일 저장·내보내기
   shell.rs                 트레이·창 닫기·알림
+  javamain.rs              java-main 클래스패스 계산·캐시
+  importers/vscode.rs      VS Code launch.json, importers/shared.rs 공유 파일
   importers/               IntelliJ 실행 구성·package.json·Spring Boot 모듈 스캔
   logs.rs                  링 버퍼, 줄 조립, 인코딩 해석
   store.rs                 설정 파일 저장
@@ -197,7 +210,7 @@ docs/PLANNING.md           기획서
 | M1 | MVP: 트리 + 콘솔, npm / shell / Spring Boot(Gradle·Maven) / jar 실행, 트리 종료, 설정 저장 | 완료 |
 | M2 | IntelliJ·package.json·Spring Boot 가져오기, JDK / Node / Maven 런타임 감지, 인코딩·색상 자동 주입 | 완료 |
 | M3 | 로그 검색·필터, 준비·포트 감지, 포트 충돌 처리, 트레이·알림, 로그 파일 | 완료 |
-| M4 | 의존 순서 실행, 프리셋, 자동 재시작, 디버그 모드, 빠른 java 기동 | 예정 |
+| M4 | 의존 순서 실행, 프리셋, 자동 재시작, 디버그 모드, 빠른 java 기동, VS Code 가져오기, 통합 로그, 공유 파일 | 완료 |
 
 자세한 범위와 완료 기준은 [기획서 9장](docs/PLANNING.md#9-마일스톤)에 있다.
 

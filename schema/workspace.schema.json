@@ -34,6 +34,13 @@
       "items": {
         "$ref": "#/$defs/service"
       }
+    },
+    "presets": {
+      "type": "array",
+      "description": "실행 프리셋: 그룹과 상관없이 고른 서비스 묶음",
+      "items": {
+        "$ref": "#/$defs/preset"
+      }
     }
   },
   "$defs": {
@@ -100,7 +107,7 @@
             "maven",
             "shell"
           ],
-          "description": "실행 타입. java-main은 M4에서 지원 예정"
+          "description": "실행 타입"
         },
         "cwd": {
           "type": "string",
@@ -322,6 +329,91 @@
               "type": "string"
             }
           }
+        },
+        "dependsOn": {
+          "$ref": "#/$defs/stringList",
+          "description": "먼저 준비(실행 중)돼야 하는 서비스 ID. 순환은 저장할 때 오류"
+        },
+        "autoRestart": {
+          "type": "object",
+          "description": "비정상 종료 시 자동 재시작 (있으면 켜짐)",
+          "properties": {
+            "maxRetries": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "연속 재시작 최대 횟수 (기본 3, 1분 넘게 실행되면 다시 셈)"
+            },
+            "delaySecs": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "첫 재시작까지 대기(초, 기본 3). 재시도마다 두 배, 최대 60초"
+            }
+          }
+        },
+        "debug": {
+          "type": "object",
+          "description": "'디버그로 시작'할 때 설정",
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "디버거 포트 (기본 Java 5005, Node 9229)"
+            },
+            "suspend": {
+              "type": "boolean",
+              "description": "Java: 디버거가 붙을 때까지 대기 (suspend=y)"
+            }
+          }
+        },
+        "javaMain": {
+          "type": "object",
+          "description": "java-main 클래스패스 설정",
+          "properties": {
+            "source": {
+              "enum": [
+                "gradle",
+                "maven",
+                "manual"
+              ],
+              "description": "클래스패스 출처 (기본 gradle)"
+            },
+            "module": {
+              "type": "string",
+              "description": "gradle: 프로젝트 경로(:apps:api), maven: 모듈 경로(api)"
+            },
+            "classpath": {
+              "$ref": "#/$defs/stringList",
+              "description": "manual: 클래스패스 항목"
+            },
+            "rebuild": {
+              "enum": [
+                "auto",
+                "always",
+                "never"
+              ],
+              "description": "auto: 소스·빌드 파일이 바뀌었을 때만 빌드 (기본)"
+            }
+          }
+        }
+      }
+    },
+    "preset": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "services": {
+          "$ref": "#/$defs/stringList",
+          "description": "서비스 ID 목록"
         }
       }
     }

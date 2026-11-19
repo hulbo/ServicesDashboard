@@ -55,6 +55,11 @@ export function normalizeForEdit(src: Service): Service {
   s.encoding ??= 'auto'
   s.inject ??= {}
   s.readiness ??= {}
+  s.dependsOn ??= []
+  s.debug ??= {}
+  s.javaMain ??= {}
+  s.javaMain.source ??= 'gradle'
+  s.javaMain.rebuild ??= 'auto'
   return s
 }
 
@@ -100,6 +105,14 @@ export function cleanForSave(src: Service): Service {
     if (s.inject.color !== false) delete s.inject.color
   }
   if (s.readiness && s.readiness.disabled !== true) delete s.readiness.disabled
+  if (s.type !== 'java-main') delete s.javaMain
+  else if (s.javaMain) {
+    if (s.javaMain.source === 'gradle') delete s.javaMain.source
+    if (s.javaMain.rebuild === 'auto') delete s.javaMain.rebuild
+    if (s.javaMain.source !== 'manual') delete s.javaMain.classpath
+  }
+  if (s.debug && s.debug.suspend !== true) delete s.debug.suspend
+  if (s.dependsOn) s.dependsOn = s.dependsOn.filter((d) => d !== s.id)
   if (s.encoding === 'auto') delete s.encoding
   if (typeof s.name === 'string') s.name = s.name.trim() || '이름 없음'
   // id·name·type은 비어 있지 않으므로 prune에서 지워지지 않는다 (키 순서도 유지된다).

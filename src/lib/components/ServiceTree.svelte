@@ -1,8 +1,8 @@
 <script lang="ts">
   import { app } from '../state.svelte'
   import { errorMessage } from '../api'
-  import type { Group, Service } from '../types'
-  import { isActive } from '../types'
+  import type { Group, Preset, Service } from '../types'
+  import { DEBUG_KINDS, isActive } from '../types'
   import Icon from './Icon.svelte'
   import StatusDot from './StatusDot.svelte'
   import ContextMenu, { type MenuEntry } from './ContextMenu.svelte'
@@ -48,7 +48,31 @@
     return { running, total: services.length }
   }
 
-  function isSelected(kind: 'service' | 'group', id: string) {
+  const presets = $derived(app.workspace.presets ?? [])
+
+  function presetCounts(p: Preset) {
+    const ids = p.services.filter((id) => app.workspace.services.some((s) => s.id === id))
+    return { running: ids.filter((id) => isActive(app.statuses[id]?.state)).length, total: ids.length }
+  }
+
+  function presetMenu(e: MouseEvent, p: Preset) {
+    e.preventDefault()
+    app.select({ kind: 'preset', id: p.id })
+    const c = presetCounts(p)
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: '프리셋 전체 시작', icon: 'play-all', disabled: c.total === 0, action: () => app.startPreset(p.id) },
+        { label: '프리셋 전체 중지', icon: 'stop-all', disabled: c.running === 0, action: () => app.stopPreset(p.id) },
+        'separator',
+        { label: '이름 바꾸기', icon: 'edit', action: () => (app.renaming = p.id) },
+        { label: '프리셋 삭제', icon: 'trash', danger: true, action: () => app.deletePreset(p.id) },
+      ],
+    }
+  }
+
+  function isSelected(kind: 'service' | 'group' | 'preset', id: string) {
     const sel = app.selection
     return !!sel && sel.kind === kind && 'id' in sel && sel.id === id
   }
@@ -82,6 +106,9 @@
           ? { label: '중지', icon: 'stop', shortcut: 'Ctrl+F2', action: () => app.stop(svc.id) }
           : { label: '시작', icon: 'play', shortcut: 'Shift+F10', action: () => app.start(svc.id) },
         { label: '재시작', icon: 'restart', shortcut: 'Ctrl+F5', disabled: !active, action: () => app.restart(svc.id) },
+        ...(DEBUG_KINDS.includes(svc.type) && !active
+          ? ([{ label: '디버그로 시작', icon: 'bug', shortcut: 'Shift+F9', action: () => app.start(svc.id, true) }] as MenuEntry[])
+          : []),
         'separator',
         { label: '콘솔 보기', icon: 'terminal', action: () => (app.tab = 'console') },
         { label: '설정 편집', icon: 'gear', action: () => (app.tab = 'settings') },
@@ -129,6 +156,7 @@
       items: [
         { label: '서비스 추가', icon: 'plus', action: () => app.addService() },
         { label: '그룹 추가', icon: 'folder-plus', action: () => app.addGroup() },
+        { label: '프리셋 추가', icon: 'play-all', action: () => app.addPreset() },
         { label: '가져오기…', icon: 'import', action: () => app.select({ kind: 'import' }) },
       ],
     }
@@ -278,6 +306,41 @@
     ondragover={(e) => onDragOver(e, 'root', '__root__')}
     ondrop={(e) => onDrop(e, 'root')}
   >
+    {#if presets.length && !query}
+      <div class="section-head">프리셋</div>
+      {#each presets as p (p.id)}
+        {@const c = presetCounts(p)}
+        <div
+          class="row preset"
+          class:selected={isSelected('preset', p.id)}
+          role="treeitem"
+          aria-selected={isSelected('preset', p.id)}
+          tabindex="-1"
+          onclick={() => app.select({ kind: 'preset', id: p.id })}
+          ondblclick={() => app.startPreset(p.id)}
+          oncontextmenu={(e) => presetMenu(e, p)}
+          onkeydown={() => {}}
+        >
+          <span class="pico"><Icon name="play-all" size={13} /></span>
+          {#if app.renaming === p.id}
+            <input class="rename" value={p.name} use:focusSelect onkeydown={(e) => renameKey(e, p.id)} onblur={(e) => app.rename(p.id, e.currentTarget.value)} onclick={(e) => e.stopPropagation()} />
+          {:else}
+            <span class="name">{p.name}</span>
+            <span class="count" class:live={c.running > 0}>{c.running}/{c.total}</span>
+            <span class="actions">
+              {#if c.running > 0}
+                <button class="act stop" title="프리셋 전체 중지" onclick={(e) => { e.stopPropagation(); app.stopPreset(p.id) }}><Icon name="stop" size={14} /></button>
+              {/if}
+              {#if c.running < c.total}
+                <button class="act play" title="프리셋 전체 시작" onclick={(e) => { e.stopPropagation(); app.startPreset(p.id) }}><Icon name="play-all" size={14} /></button>
+              {/if}
+            </span>
+          {/if}
+        </div>
+      {/each}
+      <div class="divider"></div>
+    {/if}
+
     {#each tree.groups as { group, services } (group.id)}
       {@const counts = groupCounts(group.id)}
       {@const open = !app.collapsed[group.id] || !!query}
@@ -377,6 +440,8 @@
         <span class="meta err">exit {st.exitCode}</span>
       {:else if st?.state === 'starting'}
         <span class="meta warn">시작 중</span>
+      {:else if st?.state === 'waiting'}
+        <span class="meta wait">대기 중</span>
       {:else if port}
         <span class="meta" class:live={active}>:{port}</span>
       {/if}
@@ -563,6 +628,9 @@
   .meta.warn {
     color: var(--warn);
   }
+  .meta.wait {
+    color: var(--accent-text);
+  }
   .actions {
     display: none;
     gap: 2px;
@@ -605,6 +673,25 @@
     color: var(--text);
     font: inherit;
     outline: 0;
+  }
+  .section-head {
+    margin: 2px 14px 2px;
+    color: var(--faint);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .row.preset {
+    gap: 6px;
+    padding-left: 8px;
+  }
+  .pico {
+    display: flex;
+    color: var(--accent-text);
+  }
+  .divider {
+    height: 1px;
+    margin: 6px 12px;
+    background: var(--border-strong);
   }
   .empty-group {
     margin: 0 6px;

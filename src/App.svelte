@@ -10,6 +10,7 @@
   import RuntimesPanel from './lib/components/RuntimesPanel.svelte'
   import SettingsPanel from './lib/components/SettingsPanel.svelte'
   import PortConflictDialog from './lib/components/PortConflictDialog.svelte'
+  import PresetPanel from './lib/components/PresetPanel.svelte'
   import Toasts from './lib/components/Toasts.svelte'
 
   let initError = $state<string | null>(null)
@@ -23,6 +24,9 @@
     if (e.key === 'F10' && e.shiftKey && svc) {
       e.preventDefault()
       void app.start(svc.id)
+    } else if (e.key === 'F9' && e.shiftKey && svc) {
+      e.preventDefault()
+      void app.start(svc.id, true)
     } else if (e.key === 'F2' && e.ctrlKey && svc) {
       e.preventDefault()
       void app.stop(svc.id)
@@ -96,6 +100,10 @@
         {#key app.selectedGroup.id}
           <GroupDetail group={app.selectedGroup} />
         {/key}
+      {:else if app.selectedPreset}
+        {#key app.selectedPreset.id}
+          <PresetPanel preset={app.selectedPreset} />
+        {/key}
       {:else if app.selection?.kind === 'workspace'}
         <WorkspaceSettings />
       {:else if app.selection?.kind === 'import'}
@@ -118,6 +126,7 @@
             <dt>Shift+F10</dt><dd>시작</dd>
             <dt>Ctrl+F2</dt><dd>중지</dd>
             <dt>Ctrl+F5</dt><dd>재시작</dd>
+            <dt>Shift+F9</dt><dd>디버그로 시작</dd>
             <dt>Ctrl+K</dt><dd>서비스 검색</dd>
             <dt>F2</dt><dd>이름 바꾸기</dd>
           </dl>

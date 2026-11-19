@@ -247,6 +247,12 @@ fn version_from_name(name: &str) -> Option<String> {
     (!v.is_empty()).then_some(v)
 }
 
+/// JDK 홈의 주 버전 (release 파일 기준)
+pub fn jdk_major_at(home: &Path) -> Option<u32> {
+    let (v, _) = jdk_version(home, false);
+    v.and_then(|v| java_major(&v).parse().ok())
+}
+
 pub fn java_major(version: &str) -> String {
     let mut parts = version.split(['.', '_', '-', '+']);
     match (parts.next(), parts.next()) {

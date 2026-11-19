@@ -9,7 +9,9 @@
 mod intellij;
 mod project;
 mod scanners;
+pub mod shared;
 mod util;
+mod vscode;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -30,6 +32,31 @@ pub enum SourceKind {
     Npm,
     Gradle,
     Maven,
+    Vscode,
+    Shared,
+}
+
+/// 원본의 복합 구성(IntelliJ Compound, VS Code compounds, 공유 파일 프리셋)
+#[derive(Debug, Clone)]
+pub struct RawPreset {
+    pub key: String,
+    pub name: String,
+    pub origin: String,
+    /// 구성 이름 (공유 파일은 후보 키)
+    pub members: Vec<String>,
+    pub source: SourceKind,
+}
+
+/// 실행 프리셋 후보: 멤버는 후보 키로 가리킨다
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetCandidate {
+    pub key: String,
+    pub name: String,
+    pub origin: String,
+    pub members: Vec<String>,
+    /// 찾지 못한 구성 이름
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +87,7 @@ pub struct ScanResult {
     pub root: String,
     pub suggested_var: String,
     pub candidates: Vec<Candidate>,
+    pub presets: Vec<PresetCandidate>,
     pub warnings: Vec<String>,
 }
 
@@ -124,7 +152,7 @@ pub fn scan(root: &Path, ctx: &ScanContext) -> Result<ScanResult, String> {
     let mut warnings = Vec::new();
     let project = Project::detect(&root, ctx, &mut warnings);
 
-    let mut intellij = intellij::collect(&project, ctx, &mut warnings);
+    let (mut intellij, mut raw_presets) = intellij::collect(&project, ctx, &mut warnings);
     // 같은 이름·같은 정의가 .run과 workspace.xml에 모두 있으면 하나만 남긴다
     let mut seen = HashSet::new();
     intellij.retain(|c| seen.insert(format!("{}|{}", c.service.name, c.fingerprint())));
@@ -143,14 +171,27 @@ pub fn scan(root: &Path, ctx: &ScanContext) -> Result<ScanResult, String> {
         None => true,
     });
 
+    let (shared, shared_presets) = shared::collect(&root, &mut warnings);
+    let (mut vscode, vscode_presets) = vscode::collect(&project, &mut warnings);
+    raw_presets.extend(vscode_presets);
+    raw_presets.extend(shared_presets);
+
+    // 기본 선택: 공유 파일 > IntelliJ > VS Code > 스캐너
+    let has_shared = !shared.is_empty();
     let has_intellij = intellij.iter().any(|c| c.recommended);
-    if has_intellij {
+    if has_shared {
+        intellij.iter_mut().for_each(|c| c.recommended = false);
+    }
+    if has_shared || has_intellij {
+        vscode.iter_mut().for_each(|c| c.recommended = false);
+    }
+    if has_shared || has_intellij || vscode.iter().any(|c| c.recommended) {
         for c in &mut scanned {
             c.recommended = false;
         }
     }
 
-    let mut candidates: Vec<Candidate> = intellij.into_iter().chain(scanned).collect();
+    let mut candidates: Vec<Candidate> = shared.into_iter().chain(intellij).chain(vscode).chain(scanned).collect();
     let root_str = util::to_slash(&root);
     for c in &mut candidates {
         c.service.extra.insert(
@@ -160,14 +201,37 @@ pub fn scan(root: &Path, ctx: &ScanContext) -> Result<ScanResult, String> {
         preview(c, &root, ctx);
     }
 
-    Ok(ScanResult { suggested_var: util::var_name_for(&root), root: root_str, candidates, warnings })
+    let presets = raw_presets
+        .into_iter()
+        .map(|p| {
+            let mut members = Vec::new();
+            let mut missing = Vec::new();
+            for m in &p.members {
+                match candidates.iter().find(|c| &c.key == m || (c.source == p.source && &c.service.name == m)) {
+                    Some(c) if !members.contains(&c.key) => members.push(c.key.clone()),
+                    Some(_) => {}
+                    None => missing.push(m.clone()),
+                }
+            }
+            PresetCandidate { key: p.key, name: p.name, origin: p.origin, members, missing }
+        })
+        .collect();
+
+    Ok(ScanResult { suggested_var: util::var_name_for(&root), root: root_str, candidates, presets, warnings })
 }
 
 /// 후보의 실제 실행 명령을 미리 계산한다 (오류도 그대로 보여 준다).
 fn preview(c: &mut Candidate, root: &Path, ctx: &ScanContext) {
     let ws = Workspace::empty("scan");
     let result = launch::build(
-        &LaunchContext { workspace: &ws, workspace_dir: root, gradle_init_script: ctx.gradle_init_script, runtimes: ctx.runtimes },
+        &LaunchContext {
+            workspace: &ws,
+            workspace_dir: root,
+            gradle_init_script: ctx.gradle_init_script,
+            runtimes: ctx.runtimes,
+            debug: false,
+            java_classpath: None,
+        },
         &c.service,
     );
     match result {

@@ -26,6 +26,8 @@
     | 'import'
     | 'runtime'
     | 'warning'
+    | 'bug'
+    | 'link'
 </script>
 
 <script lang="ts">
@@ -112,6 +114,11 @@
   {:else if name === 'runtime'}
     <rect x="4" y="4" width="8" height="8" rx="1" />
     <path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2" />
+  {:else if name === 'bug'}
+    <ellipse cx="8" cy="9" rx="3.5" ry="4.5" />
+    <path d="M8 4.5V13.5M4.5 9H2M14 9h-2.5M5 5.5L3.5 4M11 5.5L12.5 4M5 12.5L3.5 14M11 12.5l1.5 1.5" />
+  {:else if name === 'link'}
+    <path d="M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 0 1 4 4l-1 1M9 11.5l-1 1a2.8 2.8 0 0 1-4-4l1-1" />
   {:else if name === 'warning'}
     <path d="M8 2.5L14 13H2z" />
     <path d="M8 6.5v3M8 11.3v.2" />

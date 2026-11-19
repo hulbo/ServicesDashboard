@@ -38,6 +38,7 @@ describe('applyImport', () => {
     root,
     suggestedVar: 'SHOP',
     warnings: [],
+    presets: [],
     candidates: [
       cand('a', { name: 'portal', cwd: `${root}/front/portal`, npm: { script: 'dev' } }, { group: 'npm', scripts: ['build', 'dev'] }),
       cand('b', { name: 'Api', type: 'gradle-boot', cwd: root, spring: { profiles: ['local'] } }, { group: 'server', profiles: ['local', 'prod'] }),
@@ -77,7 +78,7 @@ describe('applyImport', () => {
     items[1].selected = false
     items[2].selected = false
     const r = applyImport(ws, scan, items, null, newId)
-    expect(r).toEqual({ added: [], updated: ['keep'] })
+    expect(r).toEqual({ added: [], updated: ['keep'], presets: [] })
     const s = ws.services[0]
     expect(s.id).toBe('keep')
     expect(s.name).toBe('내 포털')
@@ -85,6 +86,24 @@ describe('applyImport', () => {
     expect(s.ports).toEqual([3000])
     expect(s.npm?.script).toBe('dev') // IntelliJ 출처는 원본 스크립트로 갱신
     expect(s.cwd).toBe('${var:SHOP}/front/portal') // 같은 값의 기존 변수를 찾아 쓴다
+  })
+})
+
+describe('프리셋 가져오기', () => {
+  it('후보 키를 새 서비스 ID로 바꿔 프리셋을 만든다', () => {
+    const scan: ScanResult = {
+      root,
+      suggestedVar: 'SHOP',
+      warnings: [],
+      candidates: [cand('a', { name: 'web' }), cand('b', { name: 'api' })],
+      presets: [{ key: 'p', name: '전체', origin: '', members: ['a', 'b', 'zz'], missing: [] }],
+    }
+    const ws: Workspace = { name: 'w', groups: [], services: [] }
+    const items = initialItems(ws, scan)
+    items[1].selected = false
+    const r = applyImport(ws, scan, items, null, newId, [{ preset: scan.presets[0], selected: true }])
+    expect(r.presets).toEqual(['전체'])
+    expect(ws.presets?.[0].services).toEqual([ws.services[0].id]) // 가져온 것만
   })
 })
 

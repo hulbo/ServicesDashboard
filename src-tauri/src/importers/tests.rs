@@ -257,9 +257,12 @@ fn intellij_other_types() {
     assert_eq!(boot_run.service.gradle.as_ref().unwrap().options, vec!["--offline"]);
     assert!(!boot_run.recommended, "임시 구성은 기본 선택하지 않는다");
 
-    // 템플릿·복합·미지원 타입은 후보에 없고 경고로 알린다
+    // 복합 구성은 프리셋 후보, 미지원 타입은 경고
     assert!(!r.candidates.iter().any(|c| c.service.name == "all" || c.service.name == "py"));
-    assert!(r.warnings.iter().any(|w| w.contains("all (복합") && w.contains("py (지원하지 않는 타입")), "{:?}", r.warnings);
+    assert!(r.warnings.iter().any(|w| w.contains("py (지원하지 않는 타입")), "{:?}", r.warnings);
+    let all = r.presets.iter().find(|p| p.name == "all").unwrap();
+    assert_eq!(all.members, vec![portal.key.clone()]);
+    assert!(all.missing.is_empty());
     // 모든 후보에 출처 정보가 붙는다
     for c in &r.candidates {
         let src = c.service.extra.get("source").unwrap();
@@ -336,6 +339,70 @@ fn maven_project_detection() {
     // 같은 모듈·메인 클래스의 스캐너 후보는 중복이라 빠진다
     assert!(!result.candidates.iter().any(|c| c.source == SourceKind::Maven));
     assert!(web.command.as_deref().unwrap().contains("-pl web spring-boot:run"), "{:?}", web.command_error);
+}
+
+#[test]
+fn vscode_launch_and_shared_file() {
+    let f = gradle_fixture();
+    write(
+        &f.root,
+        ".vscode/launch.json",
+        r#"{
+  // VS Code 구성
+  "version": "0.2.0",
+  "configurations": [
+    { "type": "node", "request": "launch", "name": "front dev", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev", "--", "--port", "5175"], "cwd": "${workspaceFolder}/front/portal", "env": { "A": "1" } },
+    { "type": "node", "request": "launch", "name": "server.js", "program": "${workspaceFolder}/tools/server.js", "args": ["--x"] },
+    { "type": "java", "request": "launch", "name": "Api (vscode)", "mainClass": "com.example.api.ApiApplication", "projectName": "api", "vmArgs": "-Xmx512m -Dx=1" },
+    { "type": "node", "request": "attach", "name": "attach", "port": 9229 },
+  ],
+  "compounds": [ { "name": "전체", "configurations": ["front dev", "Api (vscode)", "없는 구성"] } ]
+}"#,
+    );
+    let r = f.scan();
+    let front = r.candidates.iter().find(|c| c.key == "vscode:front dev").unwrap();
+    assert_eq!(front.source, SourceKind::Vscode);
+    assert_eq!(front.service.npm.as_ref().unwrap().script, "dev");
+    assert_eq!(front.service.args, vec!["--port", "5175"]);
+    assert!(front.service.cwd.as_deref().unwrap().ends_with("/front/portal"));
+    assert!(!front.recommended, "IntelliJ 구성이 있으면 VS Code 후보는 기본 해제");
+    let node = r.candidates.iter().find(|c| c.key == "vscode:server.js").unwrap();
+    assert!(node.service.node.as_ref().unwrap().entry.ends_with("/tools/server.js"));
+    let api = r.candidates.iter().find(|c| c.key == "vscode:Api (vscode)").unwrap();
+    assert_eq!(api.service.kind, ServiceKind::GradleBoot);
+    assert_eq!(api.service.gradle.as_ref().unwrap().project.as_deref(), Some(":apps:api"));
+    assert_eq!(api.service.jvm_args, vec!["-Xmx512m", "-Dx=1"]);
+    assert!(r.warnings.iter().any(|w| w.contains("attach")));
+    let comp = r.presets.iter().find(|p| p.name == "전체").unwrap();
+    assert_eq!(comp.members, vec!["vscode:front dev", "vscode:Api (vscode)"]);
+    assert_eq!(comp.missing, vec!["없는 구성"]);
+
+    // 공유 파일이 있으면 그것을 기본으로 고른다
+    let svc = crate::model::Service { id: "team-api".into(), name: "Team Api".into(), cwd: Some(util::to_slash(&f.root)), ..Default::default() };
+    shared::export(&f.root, &[svc], &[], &[], &[]).unwrap();
+    let r = f.scan();
+    let team = r.candidates.iter().find(|c| c.key == "shared:team-api").unwrap();
+    assert!(team.recommended);
+    assert_eq!(team.service.cwd.as_deref(), Some(util::to_slash(&f.root).as_str()));
+    assert!(r.candidates.iter().filter(|c| c.source == SourceKind::Intellij).all(|c| !c.recommended));
+}
+
+#[test]
+fn non_boot_java_becomes_java_main() {
+    let f = gradle_fixture();
+    // 루트에서 Boot를 적용하지 않는 프로젝트로 바꾼다
+    write(&f.root, "build.gradle", "subprojects { apply plugin: 'java' }\n");
+    write(
+        &f.root,
+        ".run/Cli.run.xml",
+        r#"<component name="ProjectRunConfigurationManager"><configuration name="Cli" type="Application"><option name="MAIN_CLASS_NAME" value="com.example.Cli" /><module name="shop.libs.core.main" /></configuration></component>"#,
+    );
+    let r = f.scan();
+    let cli = by_name(&r, "Cli");
+    assert_eq!(cli.service.kind, ServiceKind::JavaMain);
+    let jm = cli.service.java_main.as_ref().unwrap();
+    assert_eq!((jm.source, jm.module.as_deref()), (crate::model::ClasspathSource::Gradle, Some(":libs:core")));
+    assert!(cli.recommended);
 }
 
 #[test]

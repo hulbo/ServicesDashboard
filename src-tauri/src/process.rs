@@ -29,6 +29,8 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 #[serde(rename_all = "lowercase")]
 pub enum RunState {
     Stopped,
+    /// 의존 서비스가 준비되기를 기다리는 중 (아직 프로세스 없음)
+    Waiting,
     /// 실행했지만 아직 준비(Ready) 전 (로그 패턴·포트·HTTP 확인을 기다리는 중)
     Starting,
     Running,
@@ -57,6 +59,8 @@ pub struct ServiceStatus {
     pub urls: Vec<String>,
     /// 준비 완료 시각
     pub ready_at: Option<u64>,
+    /// 디버그로 시작했으면 디버거 포트
+    pub debug_port: Option<u16>,
 }
 
 impl ServiceStatus {
@@ -74,6 +78,7 @@ impl ServiceStatus {
             ports: Vec::new(),
             urls: Vec::new(),
             ready_at: None,
+            debug_port: None,
         }
     }
 }
@@ -102,7 +107,12 @@ pub struct ProcessManager {
     next_run: AtomicU64,
     /// 서비스별로 지금까지 감지한 포트 (다음 시작 전 포트 충돌 검사에 쓴다)
     known_ports: Mutex<HashMap<String, Vec<u16>>>,
+    /// java-main 클래스패스 준비(빌드) 중인 프로세스
+    preparing: Mutex<HashMap<String, (Arc<Job>, Arc<AtomicBool>)>>,
 }
+
+/// 준비 단계가 사용자 중지로 끝났을 때 돌려주는 오류 (실패로 알리지 않는다)
+pub const CANCELLED: &str = "__cancelled__";
 
 impl ProcessManager {
     pub fn new(logs: Arc<LogHub>, sink: Arc<dyn EventSink>) -> Arc<Self> {
@@ -114,7 +124,124 @@ impl ProcessManager {
             sink,
             next_run: AtomicU64::new(1),
             known_ports: Mutex::new(HashMap::new()),
+            preparing: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn is_preparing(&self, id: &str) -> bool {
+        self.preparing.lock().unwrap().contains_key(id)
+    }
+
+    /// 의존 서비스를 기다리는 '대기 중'으로 표시한다 (실행 중이면 그대로 둔다).
+    pub fn set_waiting(&self, id: &str) {
+        if self.is_running(id) || self.is_preparing(id) {
+            return;
+        }
+        let mut st = self.status(id);
+        if matches!(st.state, RunState::Starting | RunState::Running | RunState::Stopping) {
+            return;
+        }
+        st.state = RunState::Waiting;
+        st.pid = None;
+        st.error = None;
+        st.exit_code = None;
+        self.set_status(st);
+    }
+
+    pub fn is_waiting(&self, id: &str) -> bool {
+        self.status(id).state == RunState::Waiting
+    }
+
+    /// 대기 중인 서비스를 시작하지 못하게 됐을 때
+    pub fn fail_waiting(&self, id: &str, msg: &str) {
+        self.fail_waiting_with(id, msg, true)
+    }
+
+    /// `log`가 false면 콘솔에 안내 줄을 남기지 않는다 (이미 남긴 경우)
+    pub fn fail_waiting_with(&self, id: &str, msg: &str, log: bool) {
+        let mut st = self.status(id);
+        if st.state != RunState::Waiting {
+            return;
+        }
+        if log {
+            self.logs.push(id, STREAM_SYS, format!("✕ {msg}"));
+        }
+        st.state = RunState::Failed;
+        st.error = Some(msg.to_string());
+        st.ended_at = Some(logs::now_millis());
+        self.set_status(st);
+    }
+
+    /// 대기 중이면 취소한다. 취소했으면 true.
+    pub fn cancel_waiting(&self, id: &str) -> bool {
+        let mut st = self.status(id);
+        if st.state != RunState::Waiting {
+            return false;
+        }
+        st.state = RunState::Stopped;
+        self.set_status(st);
+        true
+    }
+
+    /// 실행 전에 필요한 작업(java-main 컴파일·클래스패스 계산)을 돌리고 끝날 때까지 기다린다.
+    /// 출력은 서비스 콘솔에 그대로 보인다. 중지하면 `CANCELLED`를 돌려준다.
+    pub fn run_prepare(&self, id: &str, spec: LaunchSpec) -> Result<(), String> {
+        if self.is_running(id) || self.is_preparing(id) {
+            return Err("이미 실행 중입니다.".into());
+        }
+        self.logs.push(id, STREAM_SYS, format!("▶ 준비: {}", spec.display));
+        let mut cmd = Command::new(&spec.program);
+        cmd.args(&spec.args)
+            .current_dir(&spec.cwd)
+            .envs(spec.env.iter())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        if let Some(tail) = &spec.raw_tail {
+            use std::os::windows::process::CommandExt;
+            cmd.raw_arg(tail);
+        }
+        job::configure(&mut cmd);
+        let mut child = cmd.spawn().map_err(|e| spawn_error_message(&spec.program, &e))?;
+        let job = Arc::new(Job::new().map_err(|e| format!("Job Object를 만들 수 없습니다: {e}"))?);
+        let _ = job.assign(&child);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.preparing.lock().unwrap().insert(id.to_string(), (job.clone(), cancelled.clone()));
+        let mut st = self.status(id);
+        st.state = RunState::Starting;
+        st.pid = Some(child.id());
+        st.command = Some(spec.display.clone());
+        st.error = None;
+        self.set_status(st);
+
+        let done = self.spawn_output_pump(id, &mut child, spec.encoding, Arc::new(|_: &str| {}));
+        let code = child.wait().ok().and_then(|s| s.code());
+        let _ = done.recv_timeout(Duration::from_secs(3));
+        job.terminate();
+        self.preparing.lock().unwrap().remove(id);
+
+        if cancelled.load(Ordering::SeqCst) {
+            self.logs.push(id, STREAM_SYS, "■ 준비 중에 중지됨".to_string());
+            let mut st = self.status(id);
+            st.state = RunState::Stopped;
+            st.pid = None;
+            self.set_status(st);
+            return Err(CANCELLED.into());
+        }
+        if code != Some(0) {
+            let msg = format!("준비(빌드) 단계가 실패했습니다 (종료 코드 {}).", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()));
+            self.logs.push(id, STREAM_SYS, format!("✕ {msg}"));
+            let mut st = self.status(id);
+            st.state = RunState::Failed;
+            st.pid = None;
+            st.exit_code = code;
+            st.error = Some(msg.clone());
+            st.ended_at = Some(logs::now_millis());
+            self.set_status(st);
+            return Err(msg);
+        }
+        Ok(())
     }
 
     pub fn known_ports(&self, id: &str) -> Vec<u16> {
@@ -222,7 +349,11 @@ impl ProcessManager {
             ports: Vec::new(),
             urls: Vec::new(),
             ready_at: if ready.is_some() { None } else { Some(started_at) },
+            debug_port: spec.debug_port,
         };
+        if let Some(p) = spec.debug_port {
+            self.logs.push(id, STREAM_SYS, format!("🐞 디버거 포트 {p} — IDE에서 Remote JVM Debug / Attach로 연결하세요."));
+        }
         // 상태를 먼저 등록해야 출력 첫 줄부터 준비 신호를 놓치지 않는다.
         self.set_status(status.clone());
 
@@ -461,12 +592,12 @@ impl ProcessManager {
         self.exited.notify_all();
         drop(job);
 
-        let (ports, urls, ready_at) = {
+        let (ports, urls, ready_at, debug_port) = {
             let statuses = self.statuses.lock().unwrap();
             statuses
                 .get(&id)
                 .filter(|s| s.run_id == run_id)
-                .map(|s| (s.ports.clone(), s.urls.clone(), s.ready_at))
+                .map(|s| (s.ports.clone(), s.urls.clone(), s.ready_at, s.debug_port))
                 .unwrap_or_default()
         };
         self.set_status(ServiceStatus {
@@ -482,11 +613,20 @@ impl ProcessManager {
             ports,
             urls,
             ready_at,
+            debug_port,
         });
     }
 
     /// 프로세스 트리 전체를 종료하고, 종료될 때까지 기다린다.
     pub fn stop(&self, id: &str) -> Result<(), String> {
+        if self.cancel_waiting(id) {
+            return Ok(());
+        }
+        if let Some((job, cancelled)) = self.preparing.lock().unwrap().get(id).cloned() {
+            cancelled.store(true, Ordering::SeqCst);
+            job.terminate();
+            return Ok(());
+        }
         let run_id = {
             let running = self.running.lock().unwrap();
             let Some(r) = running.get(id) else { return Ok(()) };
@@ -503,6 +643,14 @@ impl ProcessManager {
     }
 
     pub fn stop_many(&self, ids: &[String]) -> Result<(), String> {
+        for id in ids {
+            if !self.cancel_waiting(id) {
+                if let Some((job, cancelled)) = self.preparing.lock().unwrap().get(id).cloned() {
+                    cancelled.store(true, Ordering::SeqCst);
+                    job.terminate();
+                }
+            }
+        }
         let mut targets = Vec::new();
         {
             let running = self.running.lock().unwrap();
@@ -526,6 +674,10 @@ impl ProcessManager {
 
     /// 앱 종료 시: 기다리지 않고 모든 프로세스 트리를 종료한다.
     pub fn kill_all_now(&self) {
+        for (job, cancelled) in self.preparing.lock().unwrap().values() {
+            cancelled.store(true, Ordering::SeqCst);
+            job.terminate();
+        }
         let running = self.running.lock().unwrap();
         for r in running.values() {
             r.stop_requested.store(true, Ordering::SeqCst);
@@ -607,6 +759,7 @@ mod tests {
             env: EnvMap::from([("SD_TEST_VALUE".to_string(), "hello-env".to_string())]),
             display: command.to_string(),
             encoding: OutputEncoding::Auto,
+            debug_port: None,
         }
     }
 
@@ -731,6 +884,39 @@ mod tests {
         assert!(texts(&hub, "p2").iter().any(|t| t.contains("준비 신호를 찾지 못해")));
         pm.stop("p2").unwrap();
         drop(listener);
+    }
+
+    #[test]
+    fn waiting_and_prepare() {
+        let hub = Arc::new(LogHub::new(1000));
+        let pm = ProcessManager::new(hub.clone(), Arc::new(Collect::default()));
+        pm.set_waiting("w");
+        assert_eq!(pm.status("w").state, RunState::Waiting);
+        pm.stop("w").unwrap();
+        assert_eq!(pm.status("w").state, RunState::Stopped);
+        pm.set_waiting("w");
+        pm.fail_waiting("w", "의존 서비스 실패");
+        assert_eq!(pm.status("w").state, RunState::Failed);
+
+        // 준비 단계: 성공·실패
+        let ok = if cfg!(windows) { "echo compiling" } else { "echo compiling" };
+        pm.run_prepare("j", shell_spec(ok)).unwrap();
+        assert!(texts(&hub, "j").iter().any(|t| t.trim() == "compiling"));
+        let bad = "exit 4";
+        assert!(pm.run_prepare("j", shell_spec(bad)).unwrap_err().contains("종료 코드 4"));
+        assert_eq!(pm.status("j").state, RunState::Failed);
+
+        // 준비 중 중지 → CANCELLED
+        let pm2 = pm.clone();
+        let long = if cfg!(windows) { "ping -n 30 127.0.0.1 > nul" } else { "sleep 30" };
+        let h = thread::spawn(move || pm2.run_prepare("k", shell_spec(long)));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pm.is_preparing("k") && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        pm.stop("k").unwrap();
+        assert_eq!(h.join().unwrap().unwrap_err(), CANCELLED);
+        assert_eq!(pm.status("k").state, RunState::Stopped);
     }
 
     #[test]

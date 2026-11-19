@@ -6,12 +6,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::importers::{self, ScanContext, ScanResult};
-use crate::launch::{self, LaunchContext, LaunchPreview, LaunchSpec};
+use crate::javamain;
+use crate::launch::{self, JavaClasspath, LaunchContext, LaunchPreview, LaunchSpec};
 use crate::logfile::{self, LogFiles};
 use crate::logs::{LogBatch, LogHub, LogLine, STREAM_SYS};
-use crate::model::{Service, Workspace};
+use crate::model::{ClasspathSource, Service, ServiceKind, Workspace};
 use crate::ports::{self, PortOwner};
-use crate::process::{EventSink, ProcessManager, ServiceStatus};
+use crate::process::{CANCELLED, EventSink, ProcessManager, RunState, ServiceStatus};
 use crate::runtime::{self, DetectEnv, RuntimeInfo};
 use crate::store::{Settings, Store};
 use crate::vars::VarContext;
@@ -19,6 +20,10 @@ use crate::watch::{self, ReadySpec};
 
 pub const EVENT_STATE: &str = "service://state";
 pub const EVENT_LOGS: &str = "service://logs";
+pub const EVENT_START_ERROR: &str = "service://start-error";
+
+/// 의존 서비스 대기가 이 시간을 넘으면 포기한다.
+const LAUNCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 pub struct TauriSink(pub AppHandle);
 
@@ -26,6 +31,9 @@ impl EventSink for TauriSink {
     fn status(&self, status: &ServiceStatus) {
         let _ = self.0.emit(EVENT_STATE, status);
         crate::shell::on_status(&self.0, status);
+        if let Some(core) = tauri::Manager::try_state::<Arc<AppCore>>(&self.0) {
+            core.inner().clone().on_status(status);
+        }
     }
     fn logs(&self, batches: Vec<LogBatch>) {
         let _ = self.0.emit(EVENT_LOGS, batches);
@@ -43,6 +51,10 @@ pub struct AppCore {
     pub detect_env: DetectEnv,
     pub settings: Mutex<Settings>,
     pub files: Arc<LogFiles>,
+    /// 서비스별 연속 자동 재시작 횟수
+    pub restarts: Mutex<std::collections::HashMap<String, u32>>,
+    /// 백그라운드 시작 실패를 화면에 알린다
+    pub on_error: Box<dyn Fn(&StartError) + Send + Sync>,
 }
 
 #[derive(Serialize)]
@@ -60,7 +72,7 @@ pub struct AppInfo {
     pub workspace_path: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StartError {
     pub id: String,
@@ -86,7 +98,7 @@ impl AppCore {
         guard.clone().unwrap_or_default()
     }
 
-    fn build_spec(&self, ws: &Workspace, svc: &Service) -> Result<LaunchSpec, String> {
+    fn build_spec(&self, ws: &Workspace, svc: &Service, debug: bool, cp: Option<&JavaClasspath>) -> Result<LaunchSpec, String> {
         let dir = self.store.workspace_dir();
         let runtimes = self.runtimes(false);
         launch::build(
@@ -95,9 +107,75 @@ impl AppCore {
                 workspace_dir: &dir,
                 gradle_init_script: &self.store.gradle_init_script,
                 runtimes: &runtimes,
+                debug,
+                java_classpath: cp,
             },
             svc,
         )
+    }
+
+    fn classpath_files(&self, id: &str) -> javamain::CacheFiles {
+        javamain::cache_files(&self.store.base_dir.join("classpath"), id)
+    }
+
+    fn expanded_cwd(&self, ws: &Workspace, svc: &Service) -> Result<std::path::PathBuf, String> {
+        let dir = self.store.workspace_dir();
+        let vars = VarContext::new(&ws.variables, &dir.to_string_lossy());
+        let cwd = vars.expand_opt(svc.cwd.as_ref())?.ok_or("작업 디렉터리를 지정하세요.")?;
+        let p = std::path::PathBuf::from(cwd);
+        Ok(if p.is_absolute() { p } else { dir.join(p) })
+    }
+
+    /// java-main: 필요하면 빌드 도구로 컴파일·클래스패스를 계산하고, 캐시된 클래스패스를 돌려준다.
+    fn prepare_java_main(&self, ws: &Workspace, svc: &Service) -> Result<JavaClasspath, String> {
+        let jm = svc.java_main.clone().unwrap_or_default();
+        let files = self.classpath_files(&svc.id);
+        let cwd = self.expanded_cwd(ws, svc)?;
+        let entries = match jm.source {
+            ClasspathSource::Manual => {
+                let dir = self.store.workspace_dir();
+                let vars = VarContext::new(&ws.variables, &dir.to_string_lossy());
+                let mut out = Vec::new();
+                for e in &jm.classpath {
+                    let p = std::path::PathBuf::from(vars.expand(e)?);
+                    out.push(if p.is_absolute() { p } else { cwd.join(p) }.to_string_lossy().replace('\\', "/"));
+                }
+                if out.is_empty() {
+                    return Err("클래스패스를 입력하세요 (직접 지정 방식).".into());
+                }
+                out
+            }
+            ClasspathSource::Gradle | ClasspathSource::Maven => {
+                if javamain::needs_build(jm.rebuild, &files.classpath, &cwd) {
+                    let prep = javamain::prepare_service(svc, &files, &self.store.gradle_classpath_script)
+                        .ok_or("준비 단계를 만들 수 없습니다.")?;
+                    let spec = self.build_spec(ws, &prep, false, None)?;
+                    let _ = std::fs::remove_file(&files.classpath);
+                    self.manager.run_prepare(&svc.id, spec)?;
+                    if jm.source == ClasspathSource::Maven {
+                        let module_dir = match jm.module.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+                            Some(m) => cwd.join(m),
+                            None => cwd.clone(),
+                        };
+                        javamain::finish_maven(&files, &module_dir)?;
+                    } else if !files.classpath.is_file() {
+                        return Err("Gradle이 클래스패스를 만들지 못했습니다. java 플러그인이 적용된 프로젝트 경로인지 확인하세요.".into());
+                    }
+                } else {
+                    self.logs.push(&svc.id, STREAM_SYS, "⚡ 바뀐 소스·빌드 파일이 없어 빌드를 건너뜁니다 (캐시된 클래스패스 사용)".to_string());
+                }
+                javamain::read_classpath(&files.classpath)?
+            }
+        };
+        javamain::write_argfile(&files.argfile, &entries)?;
+        Ok(JavaClasspath { entries, argfile: files.argfile })
+    }
+
+    /// 미리보기용: 캐시가 있으면 그것을, 없으면 자리표시를 쓴다.
+    fn preview_classpath(&self, svc: &Service) -> JavaClasspath {
+        let files = self.classpath_files(&svc.id);
+        let entries = javamain::read_classpath(&files.classpath).unwrap_or_else(|_| vec!["<시작할 때 계산>".into()]);
+        JavaClasspath { entries, argfile: files.argfile }
     }
 
     pub fn scan(&self, root: &str) -> Result<ScanResult, String> {
@@ -120,11 +198,16 @@ impl AppCore {
         watch::ready_spec(svc, http)
     }
 
-    /// 서비스가 쓸 포트(설정한 포트 + 지난번 실행에서 감지한 포트)를 점유한 프로세스
+    /// 서비스가 쓸 포트(설정한 포트 + 지난번 실행에서 감지한 포트 + 디버그 포트)를 점유한 프로세스
     pub fn port_conflicts(&self, id: &str) -> Result<Vec<PortOwner>, String> {
+        self.port_conflicts_with(id, &[])
+    }
+
+    fn port_conflicts_with(&self, id: &str, extra: &[u16]) -> Result<Vec<PortOwner>, String> {
         let ws = self.current()?;
         let svc = ws.service(id).ok_or_else(|| format!("서비스를 찾을 수 없습니다: {id}"))?;
         let mut wanted = svc.ports.clone();
+        wanted.extend(extra.iter().filter(|p| !svc.ports.contains(p)));
         for p in self.manager.known_ports(id) {
             if !wanted.contains(&p) {
                 wanted.push(p);
@@ -140,18 +223,15 @@ impl AppCore {
         Ok(owners)
     }
 
-    pub fn start(&self, id: &str) -> Result<ServiceStatus, String> {
+    /// 서비스 하나를 바로 시작한다 (의존 관계는 보지 않는다. 보통은 `launch`를 쓴다).
+    pub fn start(&self, id: &str, debug: bool) -> Result<ServiceStatus, String> {
         let ws = self.current()?;
         let svc = ws.service(id).ok_or_else(|| format!("서비스를 찾을 수 없습니다: {id}"))?;
-        let prepared = self.build_spec(&ws, svc).and_then(|spec| Ok((spec, self.ready_spec(&ws, svc)?)));
-        let (spec, ready) = match prepared {
-            Ok(x) => x,
-            Err(e) => {
-                self.logs.push(id, STREAM_SYS, format!("✕ 실행할 수 없습니다: {e}"));
-                return Err(e);
-            }
-        };
-        let conflicts = self.port_conflicts(id)?;
+        let debug_port = debug.then(|| {
+            let java = !matches!(svc.kind, ServiceKind::Npm | ServiceKind::Node | ServiceKind::Shell);
+            svc.debug.as_ref().and_then(|d| d.port).unwrap_or(if java { 5005 } else { 9229 })
+        });
+        let conflicts = self.port_conflicts_with(id, &debug_port.into_iter().collect::<Vec<_>>())?;
         if !conflicts.is_empty() {
             let names = ws.services.iter().map(|s| (s.id.as_str(), s.name.as_str())).collect::<std::collections::HashMap<_, _>>();
             let list = conflicts
@@ -166,29 +246,176 @@ impl AppCore {
             self.logs.push(id, STREAM_SYS, format!("✕ {msg}"));
             return Err(msg);
         }
+        let cp = if svc.kind == ServiceKind::JavaMain {
+            match self.prepare_java_main(&ws, svc) {
+                Ok(cp) => Some(cp),
+                Err(e) => {
+                    if e != CANCELLED && !e.starts_with("준비(빌드)") {
+                        self.logs.push(id, STREAM_SYS, format!("✕ 실행할 수 없습니다: {e}"));
+                    }
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+        let prepared = self.build_spec(&ws, svc, debug, cp.as_ref()).and_then(|spec| Ok((spec, self.ready_spec(&ws, svc)?)));
+        let (spec, ready) = match prepared {
+            Ok(x) => x,
+            Err(e) => {
+                self.logs.push(id, STREAM_SYS, format!("✕ 실행할 수 없습니다: {e}"));
+                return Err(e);
+            }
+        };
         self.manager.start(id, spec, ready)
     }
 
-    pub fn start_group(&self, group_id: &str) -> Vec<StartError> {
-        let mut errors = Vec::new();
-        let ids = match self.group_service_ids(group_id) {
-            Ok(ids) => ids,
-            Err(error) => return vec![StartError { id: group_id.into(), name: group_id.into(), error }],
-        };
-        for (sid, name) in ids {
-            if self.manager.is_running(&sid) {
-                continue;
-            }
-            if let Err(error) = self.start(&sid) {
-                errors.push(StartError { id: sid, name, error });
-            }
-        }
-        errors
+    fn is_active(&self, id: &str) -> bool {
+        self.manager.is_running(id)
+            || self.manager.is_preparing(id)
+            || matches!(self.manager.status(id).state, RunState::Starting | RunState::Running | RunState::Stopping)
     }
 
-    pub fn stop_group(&self, group_id: &str) -> Result<(), String> {
-        let ids: Vec<String> = self.group_service_ids(group_id)?.into_iter().map(|(sid, _)| sid).collect();
-        self.manager.stop_many(&ids)
+    fn report(&self, id: &str, name: &str, error: &str) {
+        (self.on_error)(&StartError { id: id.into(), name: name.into(), error: error.into() });
+    }
+
+    /// 서비스들을 의존 순서대로 시작한다. 의존 대상이 준비될 때까지 '대기 중'으로 두고,
+    /// 실제 시작은 백그라운드에서 한다 (실패는 on_error로 알린다).
+    /// `manual`이면 사용자가 직접 시작한 것으로 보고 자동 재시작 횟수를 초기화한다.
+    pub fn launch(self: &Arc<Self>, ids: Vec<String>, debug: bool, manual: bool) -> Result<(), String> {
+        let ws = self.current()?;
+        for id in &ids {
+            ws.service(id).ok_or_else(|| format!("서비스를 찾을 수 없습니다: {id}"))?;
+        }
+        if manual {
+            let mut r = self.restarts.lock().unwrap();
+            for id in &ids {
+                r.remove(id);
+            }
+        }
+        let explicit: std::collections::HashSet<String> = ids.iter().cloned().collect();
+        let pending: Vec<String> = ws.launch_order(&ids).into_iter().filter(|id| !self.is_active(id)).collect();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        for id in &pending {
+            self.manager.set_waiting(id);
+        }
+        let me = Arc::clone(self);
+        std::thread::Builder::new()
+            .name("launch".into())
+            .spawn(move || me.orchestrate(ws, pending, explicit, debug))
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn orchestrate(&self, ws: Workspace, mut pending: Vec<String>, explicit: std::collections::HashSet<String>, debug: bool) {
+        let began = std::time::Instant::now();
+        let mut launched: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let name = |id: &str| ws.service(id).map(|s| s.name.clone()).unwrap_or_else(|| id.to_string());
+        while !pending.is_empty() {
+            let mut next = Vec::new();
+            for id in std::mem::take(&mut pending) {
+                if !self.manager.is_waiting(&id) {
+                    continue; // 사용자가 취소함
+                }
+                let Some(svc) = ws.service(&id) else { continue };
+                let mut ready = true;
+                let mut blocked = None;
+                for d in &svc.depends_on {
+                    match self.manager.status(d).state {
+                        RunState::Running => {}
+                        RunState::Exited if launched.contains(d) => {}
+                        RunState::Waiting | RunState::Starting => ready = false,
+                        _ => {
+                            blocked = Some(d.clone());
+                            break;
+                        }
+                    }
+                }
+                if let Some(d) = blocked {
+                    let msg = format!("의존 서비스 '{}'이(가) 실행되지 않아 시작하지 않았습니다.", name(&d));
+                    self.manager.fail_waiting(&id, &msg);
+                    self.report(&id, &name(&id), &msg);
+                    continue;
+                }
+                if !ready {
+                    next.push(id);
+                    continue;
+                }
+                launched.insert(id.clone());
+                if let Err(e) = self.start(&id, debug && explicit.contains(&id)) {
+                    if e != CANCELLED {
+                        self.manager.fail_waiting_with(&id, &e, false);
+                        self.report(&id, &name(&id), &e);
+                    }
+                }
+            }
+            pending = next;
+            if pending.is_empty() {
+                break;
+            }
+            if began.elapsed() > LAUNCH_TIMEOUT {
+                for id in &pending {
+                    self.manager.fail_waiting(id, "의존 서비스를 기다리다 시간이 초과됐습니다.");
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+
+    /// 비정상 종료 시 자동 재시작
+    pub fn on_status(self: Arc<Self>, st: &ServiceStatus) {
+        // 실행 실패·준비 실패·의존 실패(error가 있는 경우)는 다시 해도 같으므로 재시작하지 않는다
+        if st.state != RunState::Failed || st.error.is_some() || st.started_at.is_none() {
+            return;
+        }
+        let Ok(ws) = self.current() else { return };
+        let Some(svc) = ws.service(&st.id) else { return };
+        let Some(cfg) = svc.auto_restart.clone() else { return };
+        let ran = st.ended_at.unwrap_or(0).saturating_sub(st.started_at.unwrap_or(0));
+        let (attempt, delay) = {
+            let mut r = self.restarts.lock().unwrap();
+            let n = r.entry(st.id.clone()).or_insert(0);
+            if ran > 60_000 {
+                *n = 0;
+            }
+            if *n >= cfg.max() {
+                self.logs.push(&st.id, STREAM_SYS, format!("⟳ 자동 재시작 한도({}회)에 도달해 멈춥니다.", cfg.max()));
+                return;
+            }
+            let delay = cfg.delay(*n);
+            *n += 1;
+            (*n, delay)
+        };
+        self.logs.push(&st.id, STREAM_SYS, format!("⟳ {}초 뒤 자동 재시작합니다 ({attempt}/{})", delay.as_secs(), cfg.max()));
+        let id = st.id.clone();
+        let run_id = st.run_id;
+        let me = Arc::clone(&self);
+        let _ = std::thread::Builder::new().name(format!("restart-{id}")).spawn(move || {
+            std::thread::sleep(delay);
+            let cur = me.manager.status(&id);
+            // 그 사이 사용자가 다시 시작·중지했으면 하지 않는다
+            if cur.state == RunState::Failed && cur.run_id == run_id {
+                let _ = me.launch(vec![id], false, false);
+            }
+        });
+    }
+
+    pub fn stop_ids(&self, ids: &[String]) -> Result<(), String> {
+        self.manager.stop_many(ids)
+    }
+
+    pub fn group_ids(&self, group_id: &str) -> Result<Vec<String>, String> {
+        Ok(self.group_service_ids(group_id)?.into_iter().map(|(sid, _)| sid).collect())
+    }
+
+    pub fn preset_ids(&self, preset_id: &str) -> Result<Vec<String>, String> {
+        let ws = self.current()?;
+        let p = ws.presets.iter().find(|p| p.id == preset_id).ok_or_else(|| format!("프리셋을 찾을 수 없습니다: {preset_id}"))?;
+        Ok(p.services.clone())
     }
 
     fn group_service_ids(&self, group_id: &str) -> Result<Vec<(String, String)>, String> {
@@ -257,9 +484,9 @@ pub fn service_statuses(core: Core) -> Vec<ServiceStatus> {
 }
 
 #[tauri::command]
-pub async fn service_start(core: Core<'_>, id: String) -> Result<ServiceStatus, String> {
+pub async fn service_start(core: Core<'_>, id: String, debug: Option<bool>) -> Result<(), String> {
     let core = core.inner().clone();
-    blocking(move || core.start(&id)).await
+    blocking(move || core.launch(vec![id], debug.unwrap_or(false), true)).await
 }
 
 #[tauri::command]
@@ -269,32 +496,64 @@ pub async fn service_stop(core: Core<'_>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn service_restart(core: Core<'_>, id: String) -> Result<ServiceStatus, String> {
+pub async fn service_restart(core: Core<'_>, id: String, debug: Option<bool>) -> Result<(), String> {
     let core = core.inner().clone();
     blocking(move || {
         core.manager.stop(&id)?;
-        core.start(&id)
+        core.launch(vec![id], debug.unwrap_or(false), true)
     })
     .await
 }
 
 #[tauri::command]
-pub async fn group_start(core: Core<'_>, id: String) -> Result<Vec<StartError>, String> {
+pub async fn group_start(core: Core<'_>, id: String) -> Result<(), String> {
     let core = core.inner().clone();
-    blocking(move || Ok(core.start_group(&id))).await
+    blocking(move || {
+        let ids = core.group_ids(&id)?;
+        core.launch(ids, false, true)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preset_start(core: Core<'_>, id: String) -> Result<(), String> {
+    let core = core.inner().clone();
+    blocking(move || {
+        let ids = core.preset_ids(&id)?;
+        core.launch(ids, false, true)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preset_stop(core: Core<'_>, id: String) -> Result<(), String> {
+    let core = core.inner().clone();
+    blocking(move || {
+        let ids = core.preset_ids(&id)?;
+        core.stop_ids(&ids)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn group_stop(core: Core<'_>, id: String) -> Result<(), String> {
     let core = core.inner().clone();
-    blocking(move || core.stop_group(&id)).await
+    blocking(move || {
+        let ids = core.group_ids(&id)?;
+        core.stop_ids(&ids)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn stop_all(core: Core<'_>) -> Result<(), String> {
     let core = core.inner().clone();
     blocking(move || {
-        let ids = core.manager.running_ids();
+        // 실행 중인 것과 대기 중인 것 모두
+        let mut ids = core.manager.running_ids();
+        if let Ok(ws) = core.current() {
+            ids.extend(ws.services.iter().map(|s| s.id.clone()).filter(|id| core.manager.is_waiting(id) || core.manager.is_preparing(id)));
+        }
         core.manager.stop_many(&ids)
     })
     .await
@@ -314,7 +573,8 @@ pub fn logs_clear(core: Core, id: String) {
 #[tauri::command]
 pub fn launch_preview(core: Core, service: Service) -> Result<LaunchPreview, String> {
     let ws = core.current()?;
-    core.build_spec(&ws, &service).map(|s| LaunchPreview::from(&s))
+    let cp = (service.kind == ServiceKind::JavaMain).then(|| core.preview_classpath(&service));
+    core.build_spec(&ws, &service, false, cp.as_ref()).map(|s| LaunchPreview::from(&s))
 }
 
 #[tauri::command]
@@ -371,6 +631,32 @@ pub async fn runtimes_detect(core: Core<'_>, refresh: bool) -> Result<Vec<Runtim
 pub async fn project_scan(core: Core<'_>, root: String) -> Result<ScanResult, String> {
     let core = core.inner().clone();
     blocking(move || core.scan(&root)).await
+}
+
+/// 이 폴더 아래에서 실행하는 서비스를 `<폴더>/services-dashboard.json`으로 내보낸다 (팀 공유용).
+#[tauri::command]
+pub fn project_export(core: Core, root: String) -> Result<String, String> {
+    let ws = core.current()?;
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let root_n = norm(root.trim());
+    let services: Vec<Service> = ws
+        .services
+        .iter()
+        .filter(|s| {
+            core.expanded_cwd(&ws, s).is_ok_and(|c| {
+                let c = norm(&c.to_string_lossy());
+                c == root_n || c.starts_with(&format!("{root_n}/"))
+            })
+        })
+        .cloned()
+        .collect();
+    if services.is_empty() {
+        return Err("이 폴더 아래에서 실행하는 서비스가 없습니다.".into());
+    }
+    let root_values: Vec<String> =
+        ws.variables.iter().filter(|(_, v)| norm(v) == root_n).map(|(k, _)| format!("${{var:{k}}}")).collect();
+    let path = importers::shared::export(std::path::Path::new(root.trim()), &services, &ws.groups, &ws.presets, &root_values)?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app } from '../state.svelte'
   import { errorMessage } from '../api'
-  import { findRootVar, initialItems, normPath, type ImportItem } from '../importing'
+  import { findRootVar, initialItems, normPath, type ImportItem, type PresetItem } from '../importing'
   import type { ScanResult, SourceKind } from '../types'
   import { KIND_LABELS, SOURCE_LABELS } from '../types'
   import Icon from './Icon.svelte'
@@ -11,13 +11,14 @@
   let importing = $state(false)
   let scan = $state<ScanResult | null>(null)
   let items = $state<ImportItem[]>([])
+  let presetItems = $state<PresetItem[]>([])
   let error = $state<string | null>(null)
   let useVar = $state(true)
   let varName = $state('')
   let showWarnings = $state(false)
   let expanded = $state<Record<string, boolean>>({})
 
-  const ORDER: SourceKind[] = ['intellij', 'npm', 'gradle', 'maven']
+  const ORDER: SourceKind[] = ['shared', 'intellij', 'vscode', 'npm', 'gradle', 'maven']
 
   const recentRoots = $derived([...new Set(app.workspace.services.map((s) => s.source?.root).filter((r): r is string => !!r))])
   const existingKeys = $derived(new Set(app.workspace.services.map((s) => s.source?.key).filter(Boolean)))
@@ -47,6 +48,7 @@
       const result = await app.backend.scanProject(target)
       scan = result
       items = initialItems(app.workspace, result)
+      presetItems = result.presets.map((preset) => ({ preset, selected: preset.members.length > 0 }))
       varName = result.suggestedVar
       expanded = {}
       showWarnings = false
@@ -76,6 +78,7 @@
         $state.snapshot(scan) as ScanResult,
         $state.snapshot(items) as ImportItem[],
         useVar && !existingVar ? varName : null,
+        $state.snapshot(presetItems) as PresetItem[],
       )
       if (ok) {
         scan = null
@@ -215,6 +218,29 @@
           {/each}
         </section>
       {/each}
+      {#if presetItems.length}
+        <section class="list">
+          <div class="list-head"><b>실행 프리셋 (복합 구성)</b><span class="muted">고른 서비스 중 가져온 것만 묶습니다</span></div>
+          {#each presetItems as pi, i (pi.preset.key)}
+            <div class="cand" class:off={!pi.selected}>
+              <div class="line1">
+                <input type="checkbox" bind:checked={presetItems[i].selected} disabled={!pi.preset.members.length} aria-label="{pi.preset.name} 프리셋 선택" />
+                <span class="pname">{pi.preset.name}</span>
+                <span class="badge">프리셋</span>
+                <span class="origin mono">{pi.preset.origin}</span>
+              </div>
+              <div class="line2">
+                <span class="cmd">
+                  {pi.preset.members.map((k) => items.find((x) => x.candidate.key === k)?.name ?? k).join(', ') || '연결할 서비스 없음'}
+                </span>
+              </div>
+              {#if pi.preset.missing.length}
+                <p class="cwarn"><Icon name="warning" size={12} /> 찾지 못한 구성: {pi.preset.missing.join(', ')}</p>
+              {/if}
+            </div>
+          {/each}
+        </section>
+      {/if}
       <datalist id="import-groups">
         {#each groupNames as g (g)}<option value={g}></option>{/each}
       </datalist>
@@ -436,6 +462,10 @@
   }
   .name {
     flex: 1 1 200px;
+  }
+  .pname {
+    flex: 1;
+    font-weight: 600;
   }
   .group {
     flex: 0 1 140px;

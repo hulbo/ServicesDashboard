@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app } from '../state.svelte'
   import type { Service } from '../types'
-  import { KIND_LABELS, STATE_LABELS, isActive } from '../types'
+  import { DEBUG_KINDS, KIND_LABELS, STATE_LABELS, isActive } from '../types'
   import ConsoleView from './ConsoleView.svelte'
   import Icon from './Icon.svelte'
   import ServiceForm from './ServiceForm.svelte'
@@ -33,6 +33,10 @@
 
   const detail = $derived.by(() => {
     if (!st) return ''
+    if (state === 'waiting') {
+      const deps = (service.dependsOn ?? []).filter((d) => app.statuses[d]?.state !== 'running').map((d) => app.serviceName(d))
+      return deps.length ? `의존 서비스 대기: ${deps.join(', ')}` : '시작 순서 대기'
+    }
     if (state === 'starting') return `PID ${st.pid ?? '-'} · 준비 대기 ${elapsed(st.startedAt, app.now)}`
     if (state === 'running' || state === 'stopping') {
       const boot = st.readyAt && st.startedAt && st.readyAt > st.startedAt ? ` · 기동 ${((st.readyAt - st.startedAt) / 1000).toFixed(1)}초` : ''
@@ -51,6 +55,9 @@
       <h2 title={service.name}>{service.name}</h2>
       <span class="state st-{state}">{STATE_LABELS[state]}</span>
       {#if detail}<span class="sub" title={detail}>{detail}</span>{/if}
+      {#if active && st?.debugPort}
+        <span class="debug" title="IDE에서 Remote JVM Debug(Java) 또는 Attach(Node)로 127.0.0.1:{st.debugPort}에 연결하세요"><Icon name="bug" size={12} /> 디버그 :{st.debugPort}</span>
+      {/if}
       {#if links.length}
         <span class="ports">
           {#each links as l (l.url)}
@@ -67,6 +74,9 @@
         <button class="btn" title="재시작 (Ctrl+F5)" disabled={state === 'stopping'} onclick={() => app.restart(service.id)}><Icon name="restart" size={14} /> 재시작</button>
       {:else}
         <button class="btn run" title="시작 (Shift+F10)" onclick={() => app.start(service.id)}><Icon name="play" size={14} /> 시작</button>
+        {#if DEBUG_KINDS.includes(service.type)}
+          <button class="btn" title="디버그로 시작 (Shift+F9)" onclick={() => app.start(service.id, true)}><Icon name="bug" size={14} /> 디버그</button>
+        {/if}
       {/if}
     </div>
   </header>
@@ -138,6 +148,18 @@
     color: var(--faint);
     font-size: 12px;
     font-variant-numeric: tabular-nums;
+  }
+  .debug {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+    color: var(--warn);
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    white-space: nowrap;
   }
   .ports {
     display: flex;

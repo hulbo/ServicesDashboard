@@ -6,15 +6,15 @@ use roxmltree::{Document, Node};
 
 use super::project::{applies_boot_plugin, gradle_build_file, Project};
 use super::util::{port_from_args, read_text, rel, split_args, to_slash};
-use super::{Candidate, ScanContext, SourceKind};
+use super::{Candidate, RawPreset, ScanContext, SourceKind};
 use crate::model::{
-    EnvMap, GradleOpts, JarOpts, MavenOpts, NodeOpts, NpmOpts, PackageManager, RuntimeOpts, Service, ServiceKind, ShellKind,
-    ShellOpts, SpringOpts,
+    ClasspathSource, EnvMap, GradleOpts, JarOpts, JavaMainOpts, MavenOpts, NodeOpts, NpmOpts, PackageManager, RuntimeOpts,
+    Service, ServiceKind, ShellKind, ShellOpts, SpringOpts,
 };
 
 const SPRING_BOOT: &str = "SpringBootApplicationConfigurationType";
 
-pub fn collect(project: &Project, ctx: &ScanContext, warnings: &mut Vec<String>) -> Vec<Candidate> {
+pub fn collect(project: &Project, ctx: &ScanContext, warnings: &mut Vec<String>) -> (Vec<Candidate>, Vec<RawPreset>) {
     let root = &project.root;
     let mut files: Vec<(PathBuf, bool)> = Vec::new();
     for dir in [root.join(".run"), root.join(".idea").join("runConfigurations")] {
@@ -31,6 +31,7 @@ pub fn collect(project: &Project, ctx: &ScanContext, warnings: &mut Vec<String>)
     }
 
     let mut out = Vec::new();
+    let mut compounds = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     for (file, is_workspace) in files {
         let origin = rel(root, &file);
@@ -56,6 +57,11 @@ pub fn collect(project: &Project, ctx: &ScanContext, warnings: &mut Vec<String>)
             }
             let name = conf.attribute("name").unwrap_or("이름 없음").to_string();
             let kind = conf.attribute("type").unwrap_or("");
+            if kind == "CompoundRunConfigurationType" {
+                let members = conf.children().filter(|n| n.has_tag_name("toRun")).filter_map(|n| n.attribute("name").map(str::to_string)).collect();
+                compounds.push(RawPreset { key: format!("intellij-compound:{origin}#{name}"), name, origin: origin.clone(), members, source: SourceKind::Intellij });
+                continue;
+            }
             let mut c = match convert(conf, kind, &name, project, ctx) {
                 Converted::Ok(c) => *c,
                 Converted::Skip(reason) => {
@@ -70,14 +76,15 @@ pub fn collect(project: &Project, ctx: &ScanContext, warnings: &mut Vec<String>)
             if temporary {
                 c.warnings.push("IntelliJ의 임시 구성입니다.".into());
             }
-            c.recommended = !temporary && c.service.kind != ServiceKind::JavaMain;
+            let manual_cp = c.service.java_main.as_ref().is_some_and(|j| j.source == ClasspathSource::Manual);
+            c.recommended = !temporary && !manual_cp;
             out.push(c);
         }
     }
     if !skipped.is_empty() {
         warnings.push(format!("가져오지 않은 IntelliJ 구성: {}", skipped.join(", ")));
     }
-    out
+    (out, compounds)
 }
 
 enum Converted {
@@ -181,7 +188,6 @@ fn convert(conf: Node, kind: &str, name: &str, project: &Project, ctx: &ScanCont
         "MavenRunConfiguration" => maven(conf, name, project, ctx),
         "GradleRunConfiguration" => gradle(conf, name, project, ctx),
         "ShConfigurationType" => shell(conf, name, project, ctx),
-        "CompoundRunConfigurationType" => Converted::Skip("복합 구성은 M4 실행 프리셋에서 지원 예정".into()),
         other => Converted::Skip(format!("지원하지 않는 타입 {other}")),
     }
 }
@@ -249,29 +255,26 @@ fn java_main(conf: Node, is_boot_config: bool, name: &str, project: &Project, ct
             svc.kind = ServiceKind::GradleBoot;
             svc.gradle = Some(GradleOpts { project: (!path.is_empty()).then_some(path), ..Default::default() });
         } else {
-            svc.kind = ServiceKind::Gradle;
-            svc.gradle = Some(GradleOpts {
-                project: (!path.is_empty()).then_some(path),
-                tasks: vec!["run".into()],
-                ..Default::default()
-            });
-            warnings.push("Spring Boot 플러그인이 없는 모듈이라 Gradle run 태스크로 바꿨습니다 (application 플러그인 필요).".into());
+            // Spring Boot가 아닌 일반 Java 앱: 메인 클래스를 직접 실행 (클래스패스는 Gradle로 계산)
+            svc.kind = ServiceKind::JavaMain;
+            svc.java_main = Some(JavaMainOpts { source: ClasspathSource::Gradle, module: (!path.is_empty()).then_some(path), ..Default::default() });
         }
     } else if !project.maven.is_empty() {
         let found = module.as_deref().and_then(|m| project.maven_module(m));
         if module.is_some() && found.is_none() {
             warnings.push(format!("Maven 모듈 '{}'을(를) 찾지 못해 루트에서 실행합니다.", module.unwrap_or_default()));
         }
-        svc.kind = ServiceKind::MavenBoot;
-        svc.maven = Some(MavenOpts {
-            module: found.map(|m| m.rel_dir.clone()).filter(|r| !r.is_empty()),
-            ..Default::default()
-        });
-        if !is_boot_config && !found.is_some_and(|m| m.boot) {
-            warnings.push("Spring Boot 모듈인지 확인하지 못했습니다. spring-boot:run이 실패하면 타입을 바꾸세요.".into());
+        let module_dir = found.map(|m| m.rel_dir.clone()).filter(|r| !r.is_empty());
+        if is_boot_config || found.is_some_and(|m| m.boot) {
+            svc.kind = ServiceKind::MavenBoot;
+            svc.maven = Some(MavenOpts { module: module_dir, ..Default::default() });
+        } else {
+            svc.kind = ServiceKind::JavaMain;
+            svc.java_main = Some(JavaMainOpts { source: ClasspathSource::Maven, module: module_dir, ..Default::default() });
         }
     } else {
-        warnings.push("Gradle/Maven 프로젝트가 아니라 메인 클래스를 직접 실행해야 합니다 (java-main, M4 예정).".into());
+        svc.java_main = Some(JavaMainOpts { source: ClasspathSource::Manual, ..Default::default() });
+        warnings.push("Gradle/Maven 프로젝트가 아니라 클래스패스를 직접 입력해야 합니다 (java-main).".into());
     }
 
     let mut c = candidate(name, svc);

@@ -73,6 +73,16 @@ pub struct LaunchSpec {
     pub env: EnvMap,
     pub display: String,
     pub encoding: OutputEncoding,
+    /// 디버그로 시작했으면 디버거 포트
+    pub debug_port: Option<u16>,
+}
+
+/// java-main 실행에 쓸 클래스패스 (AppCore가 준비해 넘긴다)
+#[derive(Debug, Clone)]
+pub struct JavaClasspath {
+    pub entries: Vec<String>,
+    /// 클래스패스가 길 때 쓰는 `java @argfile` 파일 (미리 써 둔다)
+    pub argfile: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +109,9 @@ pub struct LaunchContext<'a> {
     pub gradle_init_script: &'a Path,
     /// 별칭(`17`, `node20` 등) 해석에 쓰는 감지된 런타임 목록
     pub runtimes: &'a [RuntimeInfo],
+    /// 디버그로 시작
+    pub debug: bool,
+    pub java_classpath: Option<&'a JavaClasspath>,
 }
 
 pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
@@ -165,6 +178,28 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
             }
         }
     }
+    // 디버그 실행: Java는 JDWP 에이전트, Node는 --inspect
+    let debug_port = if ctx.debug {
+        let default = if java_kind { 5005 } else { 9229 };
+        Some(svc.debug.as_ref().and_then(|d| d.port).unwrap_or(default))
+    } else {
+        None
+    };
+    let mut node_inspect = None;
+    if let Some(port) = debug_port {
+        if java_kind {
+            let suspend = if svc.debug.as_ref().and_then(|d| d.suspend).unwrap_or(false) { "y" } else { "n" };
+            jvm_args.push(format!("-agentlib:jdwp=transport=dt_socket,server=y,suspend={suspend},address=127.0.0.1:{port}"));
+        } else if svc.kind == ServiceKind::Node {
+            node_inspect = Some(format!("--inspect=127.0.0.1:{port}"));
+        } else if svc.kind == ServiceKind::Npm {
+            let cur = get_env(&env, "NODE_OPTIONS").unwrap_or_default();
+            set_env(&mut env, "NODE_OPTIONS", format!("{cur} --inspect=127.0.0.1:{port}").trim());
+        } else {
+            return Err("이 실행 타입은 디버그 실행을 지원하지 않습니다 (Java·Node 계열만 가능).".into());
+        }
+    }
+
     let color = svc.inject_color();
     if color && matches!(svc.kind, ServiceKind::Npm | ServiceKind::Node) && get_env(&env, "FORCE_COLOR").is_none() {
         set_env(&mut env, "FORCE_COLOR", "1");
@@ -212,7 +247,8 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
             if entry.is_empty() {
                 return Err("실행할 스크립트 파일을 입력하세요 (예: server.js).".into());
             }
-            let mut a = vars.expand_all(&node.node_args)?;
+            let mut a: Vec<String> = node_inspect.into_iter().collect();
+            a.extend(vars.expand_all(&node.node_args)?);
             a.push(entry);
             a.extend(args);
             (exe_tool(node_dir.as_deref(), "node"), a)
@@ -338,10 +374,27 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
             }
         }
         ServiceKind::JavaMain => {
-            return Err(
-                "java-main 타입(메인 클래스 직접 실행)은 M4에서 지원할 예정입니다. 지금은 gradle-boot 또는 maven-boot를 사용하세요."
-                    .into(),
-            );
+            let main = main_class.clone().ok_or("실행할 메인 클래스를 입력하세요.")?;
+            let cp = ctx.java_classpath.ok_or("클래스패스가 준비되지 않았습니다 (시작하면 빌드 도구로 계산합니다).")?;
+            let mut a = jvm_args;
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            let joined = cp.entries.join(sep);
+            let java = java_program(&env);
+            let java_home = get_env(&env, "JAVA_HOME").map(PathBuf::from);
+            let major = java_home.as_deref().and_then(runtime::jdk_major_at);
+            if joined.len() < 8000 {
+                a.push("-cp".into());
+                a.push(joined);
+            } else if major.unwrap_or(9) >= 9 {
+                a.push(format!("@{}", cp.argfile.to_string_lossy()));
+            } else {
+                // JDK 8은 @argfile을 모르므로 환경변수로 넘긴다
+                set_env(&mut env, "CLASSPATH", &joined);
+            }
+            a.push(main);
+            a.extend(profile_arg);
+            a.extend(args);
+            (java, a)
         }
     };
 
@@ -362,6 +415,7 @@ pub fn build(ctx: &LaunchContext, svc: &Service) -> Result<LaunchSpec, String> {
         env,
         display,
         encoding: svc.encoding,
+        debug_port,
     })
 }
 
@@ -536,6 +590,11 @@ fn display_program(program: &str) -> String {
 }
 
 fn quote_display(arg: &str) -> String {
+    // 아주 긴 인자(클래스패스 등)는 줄여서 보여 준다
+    if arg.chars().count() > 240 {
+        let head: String = arg.chars().take(90).collect();
+        return format!("{head}…({}자)", arg.chars().count());
+    }
     if arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || c == '"') {
         format!("\"{}\"", arg.replace('"', "\\\""))
     } else {
@@ -554,6 +613,8 @@ mod tests {
         ws: Workspace,
         init: PathBuf,
         runtimes: Vec<RuntimeInfo>,
+        debug: bool,
+        cp: Option<JavaClasspath>,
     }
 
     impl Fixture {
@@ -569,7 +630,7 @@ mod tests {
                 ..Default::default()
             });
             let init = dir.path().join("init.gradle");
-            Fixture { dir, ws, init, runtimes: Vec::new() }
+            Fixture { dir, ws, init, runtimes: Vec::new(), debug: false, cp: None }
         }
         fn path(&self) -> &Path {
             self.dir.path()
@@ -581,6 +642,8 @@ mod tests {
                     workspace_dir: self.path(),
                     gradle_init_script: &self.init,
                     runtimes: &self.runtimes,
+                    debug: self.debug,
+                    java_classpath: self.cp.as_ref(),
                 },
                 svc,
             )
@@ -830,6 +893,61 @@ mod tests {
         assert!(f.build(&s).unwrap_err().contains("작업 디렉터리"));
         s.cwd = None;
         assert!(f.build(&s).unwrap_err().contains("작업 디렉터리"));
+    }
+
+    #[test]
+    fn debug_mode_per_kind() {
+        let mut f = Fixture::new();
+        f.debug = true;
+        let mut s = no_inject(svc(ServiceKind::GradleBoot));
+        s.gradle = Some(GradleOpts::default());
+        let spec = f.build(&s).unwrap();
+        assert_eq!(spec.debug_port, Some(5005));
+        assert!(spec.env.get(JVM_ARGS_ENV).unwrap().contains("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005"));
+        s.debug = Some(DebugOpts { port: Some(5006), suspend: Some(true), ..Default::default() });
+        assert!(f.build(&s).unwrap().env.get(JVM_ARGS_ENV).unwrap().contains("suspend=y,address=127.0.0.1:5006"));
+
+        fs::write(f.path().join("package.json"), "{}").unwrap();
+        let mut n = no_inject(svc(ServiceKind::Npm));
+        n.npm = Some(NpmOpts { script: "dev".into(), ..Default::default() });
+        n.env.insert("NODE_OPTIONS".into(), "--max-old-space-size=4096".into());
+        let spec = f.build(&n).unwrap();
+        assert_eq!(spec.env.get("NODE_OPTIONS").unwrap(), "--max-old-space-size=4096 --inspect=127.0.0.1:9229");
+
+        let mut nd = no_inject(svc(ServiceKind::Node));
+        nd.node = Some(NodeOpts { entry: "server.js".into(), node_args: vec!["--trace-warnings".into()], ..Default::default() });
+        assert_eq!(f.build(&nd).unwrap().args[..3], ["--inspect=127.0.0.1:9229", "--trace-warnings", "server.js"]);
+
+        let mut sh = svc(ServiceKind::Shell);
+        sh.shell = Some(ShellOpts { command: "x".into(), ..Default::default() });
+        assert!(f.build(&sh).unwrap_err().contains("디버그"));
+        f.debug = false;
+        assert_eq!(f.build(&s).unwrap().debug_port, None);
+    }
+
+    #[test]
+    fn java_main_with_classpath() {
+        let mut f = Fixture::new();
+        let mut s = no_inject(svc(ServiceKind::JavaMain));
+        s.main_class = Some("com.example.App".into());
+        s.args = vec!["--x".into()];
+        assert!(f.build(&s).unwrap_err().contains("클래스패스"));
+        f.cp = Some(JavaClasspath { entries: vec!["C:/p/build/classes".into(), "C:/m2/a.jar".into()], argfile: f.path().join("a.argfile") });
+        let spec = f.build(&s).unwrap();
+        assert_eq!(spec.args, vec!["-cp", if cfg!(windows) { "C:/p/build/classes;C:/m2/a.jar" } else { "C:/p/build/classes:C:/m2/a.jar" }, "com.example.App", "--x"]);
+        // 긴 클래스패스는 @argfile
+        f.cp = Some(JavaClasspath { entries: (0..300).map(|i| format!("C:/m2/repo/some/group/artifact-{i}/1.0/artifact-{i}-1.0.jar")).collect(), argfile: f.path().join("a.argfile") });
+        let spec = f.build(&s).unwrap();
+        assert!(spec.args[0].starts_with('@') && spec.args[0].ends_with("a.argfile"));
+        s.main_class = None;
+        assert!(f.build(&s).unwrap_err().contains("메인 클래스"));
+    }
+
+    #[test]
+    fn long_args_are_shortened_in_display() {
+        let long = "x".repeat(500);
+        let d = quote_display(&long);
+        assert!(d.len() < 120 && d.ends_with("…(500자)"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 // 스캔 결과(후보)를 워크스페이스에 넣는 순수 로직. 화면(ImportPanel)과 다시 가져오기에서 같이 쓴다.
 
-import type { Candidate, Group, ScanResult, Service, Workspace } from './types'
+import type { Candidate, Group, PresetCandidate, ScanResult, Service, Workspace } from './types'
 
 export interface ImportItem {
   candidate: Candidate
@@ -87,6 +87,12 @@ function findOrCreateGroup(ws: Workspace, name: string, newId: (p: string) => st
 export interface ImportOutcome {
   added: string[]
   updated: string[]
+  presets: string[]
+}
+
+export interface PresetItem {
+  preset: PresetCandidate
+  selected: boolean
 }
 
 /** 선택한 후보를 워크스페이스에 넣는다 (ws를 직접 고친다). */
@@ -96,8 +102,12 @@ export function applyImport(
   items: ImportItem[],
   varName: string | null,
   newId: (prefix: string) => string,
+  presetItems: PresetItem[] = [],
 ): ImportOutcome {
-  const out: ImportOutcome = { added: [], updated: [] }
+  const out: ImportOutcome = { added: [], updated: [], presets: [] }
+  /** 후보 키 → 워크스페이스 서비스 ID (프리셋 멤버 연결용) */
+  const keyToId = new Map<string, string>()
+  for (const s of ws.services) if (s.source?.key) keyToId.set(s.source.key, s.id)
   if (varName) {
     ws.variables = { ...(ws.variables ?? {}), [varName]: scan.root }
   }
@@ -118,6 +128,7 @@ export function applyImport(
     if (existingIdx >= 0) {
       ws.services[existingIdx] = mergeImported(ws.services[existingIdx], svc)
       out.updated.push(ws.services[existingIdx].id)
+      keyToId.set(item.candidate.key, ws.services[existingIdx].id)
       continue
     }
     const group = findOrCreateGroup(ws, item.group, newId)
@@ -128,6 +139,24 @@ export function applyImport(
     else delete svc.group
     ws.services.push(svc)
     out.added.push(svc.id)
+    keyToId.set(item.candidate.key, svc.id)
+  }
+
+  // 원본 의존 관계(공유 파일의 dependsOn)는 원래 서비스 ID를 가리키므로 새 ID로 바꾼다
+  for (const item of items.filter((i) => i.selected && i.candidate.source === 'shared')) {
+    const id = keyToId.get(item.candidate.key)
+    const svc = ws.services.find((s) => s.id === id)
+    if (svc?.dependsOn) svc.dependsOn = svc.dependsOn.map((d) => keyToId.get(`shared:${d}`) ?? d).filter((d) => ws.services.some((s) => s.id === d))
+  }
+
+  for (const pi of presetItems.filter((p) => p.selected)) {
+    const members = pi.preset.members.map((k) => keyToId.get(k)).filter((x): x is string => !!x)
+    if (!members.length) continue
+    ws.presets ??= []
+    const existing = ws.presets.find((p) => p.name === pi.preset.name)
+    if (existing) existing.services = [...new Set([...existing.services, ...members])]
+    else ws.presets.push({ id: newId('pre'), name: pi.preset.name, services: members })
+    out.presets.push(pi.preset.name)
   }
   return out
 }

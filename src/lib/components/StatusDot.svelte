@@ -25,6 +25,11 @@
     background: var(--warn);
     animation: pulse 1s ease-in-out infinite;
   }
+  .st-waiting {
+    background: transparent;
+    border: 1.5px dashed var(--accent-text);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
   .st-failed {
     background: var(--err);
   }

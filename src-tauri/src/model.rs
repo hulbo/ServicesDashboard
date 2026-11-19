@@ -26,6 +26,20 @@ pub struct Workspace {
     pub groups: Vec<Group>,
     #[serde(default)]
     pub services: Vec<Service>,
+    /// 실행 프리셋: 그룹과 상관없이 고른 서비스 묶음
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<Preset>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Preset {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub services: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -97,6 +111,18 @@ pub struct Service {
     /// 준비(Ready) 감지 방법. 없으면 타입별 기본값을 쓴다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readiness: Option<ReadinessOpts>,
+    /// 먼저 준비돼야 하는 서비스 ID
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// 비정상 종료 시 자동 재시작 (있으면 켜짐)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_restart: Option<AutoRestartOpts>,
+    /// '디버그로 시작'할 때 쓰는 설정
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug: Option<DebugOpts>,
+    /// java-main: 클래스패스를 어디서 얻을지
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub java_main: Option<JavaMainOpts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spring: Option<SpringOpts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,6 +176,82 @@ pub struct InjectOpts {
     /// Node: FORCE_COLOR=1, Spring Boot: --spring.output.ansi.enabled=always, Maven: -Dstyle.color=always
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<bool>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoRestartOpts {
+    /// 연속 재시작 최대 횟수 (기본 3). 1분 넘게 실행되면 횟수를 다시 센다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
+    /// 첫 재시작까지 기다리는 시간(초, 기본 3). 재시도마다 두 배 (최대 60초)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_secs: Option<u64>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl AutoRestartOpts {
+    pub fn max(&self) -> u32 {
+        self.max_retries.unwrap_or(3)
+    }
+    /// n번째(0부터) 재시작 전 대기 시간
+    pub fn delay(&self, attempt: u32) -> std::time::Duration {
+        let base = self.delay_secs.unwrap_or(3).max(1);
+        std::time::Duration::from_secs(base.saturating_mul(1u64 << attempt.min(6)).min(60))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugOpts {
+    /// 디버거 포트 (기본: Java 5005, Node 9229)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// Java: 디버거가 붙을 때까지 기다린다 (suspend=y)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspend: Option<bool>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ClasspathSource {
+    /// Gradle로 컴파일하고 runtimeClasspath를 얻는다
+    #[default]
+    Gradle,
+    /// Maven으로 컴파일하고 dependency:build-classpath로 얻는다
+    Maven,
+    /// 직접 적은 클래스패스만 쓴다 (빌드 안 함)
+    Manual,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RebuildPolicy {
+    /// 소스·빌드 파일이 바뀌었을 때만 빌드
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct JavaMainOpts {
+    #[serde(default)]
+    pub source: ClasspathSource,
+    /// gradle: 프로젝트 경로 (예: :apps:api), maven: 모듈 경로 (예: api)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    /// manual: 클래스패스 항목 (폴더·jar)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classpath: Vec<String>,
+    #[serde(default)]
+    pub rebuild: RebuildPolicy,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -327,7 +429,93 @@ impl Workspace {
                 }
             }
         }
+        for s in &self.services {
+            for d in &s.depends_on {
+                if d == &s.id {
+                    return Err(format!("서비스 '{}'이(가) 자기 자신에 의존합니다.", s.name));
+                }
+                if self.service(d).is_none() {
+                    return Err(format!("서비스 '{}'의 의존 대상 '{d}'이(가) 없습니다.", s.name));
+                }
+            }
+        }
+        if let Some(cycle) = self.dependency_cycle() {
+            return Err(format!("의존 관계가 순환합니다: {}", cycle.join(" → ")));
+        }
+        let mut preset_ids = std::collections::HashSet::new();
+        for p in &self.presets {
+            if p.id.trim().is_empty() || !preset_ids.insert(p.id.clone()) {
+                return Err(format!("프리셋 ID '{}'가 비었거나 중복됩니다.", p.id));
+            }
+            if let Some(missing) = p.services.iter().find(|id| self.service(id).is_none()) {
+                return Err(format!("프리셋 '{}'의 서비스 '{missing}'이(가) 없습니다.", p.name));
+            }
+        }
         Ok(())
+    }
+
+    /// 순환 의존이 있으면 그 경로(서비스 이름)를 돌려준다.
+    pub fn dependency_cycle(&self) -> Option<Vec<String>> {
+        fn visit<'a>(
+            ws: &'a Workspace,
+            id: &'a str,
+            state: &mut std::collections::HashMap<&'a str, u8>,
+            stack: &mut Vec<&'a str>,
+        ) -> Option<Vec<String>> {
+            match state.get(id) {
+                Some(2) => return None,
+                Some(1) => {
+                    let start = stack.iter().position(|s| *s == id).unwrap_or(0);
+                    let mut path: Vec<String> = stack[start..]
+                        .iter()
+                        .map(|sid| ws.service(sid).map(|s| s.name.clone()).unwrap_or_else(|| sid.to_string()))
+                        .collect();
+                    path.push(ws.service(id).map(|s| s.name.clone()).unwrap_or_else(|| id.to_string()));
+                    return Some(path);
+                }
+                _ => {}
+            }
+            state.insert(id, 1);
+            stack.push(id);
+            if let Some(svc) = ws.service(id) {
+                for d in &svc.depends_on {
+                    if let Some(c) = visit(ws, d, state, stack) {
+                        return Some(c);
+                    }
+                }
+            }
+            stack.pop();
+            state.insert(id, 2);
+            None
+        }
+        let mut state = std::collections::HashMap::new();
+        for s in &self.services {
+            if let Some(c) = visit(self, &s.id, &mut state, &mut Vec::new()) {
+                return Some(c);
+            }
+        }
+        None
+    }
+
+    /// ids와 그 의존 대상 전체를 의존 순서(먼저 시작할 것부터)로 돌려준다.
+    pub fn launch_order(&self, ids: &[String]) -> Vec<String> {
+        fn add(ws: &Workspace, id: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>) {
+            if !seen.insert(id.to_string()) {
+                return;
+            }
+            if let Some(svc) = ws.service(id) {
+                for d in &svc.depends_on {
+                    add(ws, d, out, seen);
+                }
+                out.push(id.to_string());
+            }
+        }
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for id in ids {
+            add(self, id, &mut out, &mut seen);
+        }
+        out
     }
 }
 
@@ -356,6 +544,35 @@ mod tests {
         assert_eq!(out["services"][0]["gradle"]["daemon"], false);
         // 기본값은 저장하지 않는다
         assert!(out["services"][0].get("encoding").is_none());
+    }
+
+    fn svc(id: &str, deps: &[&str]) -> Service {
+        Service { id: id.into(), name: id.to_uppercase(), depends_on: deps.iter().map(|d| d.to_string()).collect(), ..Default::default() }
+    }
+
+    #[test]
+    fn dependencies_validate_and_order() {
+        let mut ws = Workspace::empty("t");
+        ws.services = vec![svc("web", &["api"]), svc("api", &["db", "auth"]), svc("auth", &["db"]), svc("db", &[]), svc("x", &[])];
+        ws.validate().unwrap();
+        assert_eq!(ws.launch_order(&["web".into()]), vec!["db", "auth", "api", "web"]);
+        assert_eq!(ws.launch_order(&["x".into(), "auth".into()]), vec!["x", "db", "auth"]);
+        ws.services[3].depends_on = vec!["web".into()];
+        assert_eq!(ws.validate().unwrap_err(), "의존 관계가 순환합니다: WEB → API → DB → WEB");
+        ws.services[3].depends_on = vec!["db".into()];
+        assert!(ws.validate().unwrap_err().contains("자기 자신"));
+        ws.services[3].depends_on = vec!["nope".into()];
+        assert!(ws.validate().unwrap_err().contains("'nope'"));
+    }
+
+    #[test]
+    fn presets_and_restart_policy() {
+        let mut ws = Workspace::empty("t");
+        ws.services = vec![svc("a", &[])];
+        ws.presets = vec![Preset { id: "p".into(), name: "풀스택".into(), services: vec!["a".into(), "b".into()], ..Default::default() }];
+        assert!(ws.validate().unwrap_err().contains("'b'"));
+        let r = AutoRestartOpts::default();
+        assert_eq!((r.max(), r.delay(0).as_secs(), r.delay(1).as_secs(), r.delay(9).as_secs()), (3, 3, 6, 60));
     }
 
     #[test]

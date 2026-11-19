@@ -75,6 +75,7 @@ pub struct Store {
     pub base_dir: PathBuf,
     pub workspace_path: PathBuf,
     pub gradle_init_script: PathBuf,
+    pub gradle_classpath_script: PathBuf,
     pub settings_path: PathBuf,
     pub settings: Settings,
 }
@@ -113,7 +114,10 @@ impl Store {
         let gradle_init_script = gradle_dir.join("sd-init.gradle");
         write_atomic(&gradle_init_script, GRADLE_INIT_SCRIPT)?;
 
-        Ok(Store { base_dir, workspace_path, gradle_init_script, settings_path, settings })
+        let gradle_classpath_script = gradle_dir.join("sd-classpath.gradle");
+        write_atomic(&gradle_classpath_script, crate::javamain::GRADLE_CLASSPATH_SCRIPT)?;
+
+        Ok(Store { base_dir, workspace_path, gradle_init_script, gradle_classpath_script, settings_path, settings })
     }
 
     pub fn logs_dir(&self) -> PathBuf {

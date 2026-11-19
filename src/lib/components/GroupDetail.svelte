@@ -6,10 +6,12 @@
   import Icon from './Icon.svelte'
   import KeyValueEditor from './KeyValueEditor.svelte'
   import StatusDot from './StatusDot.svelte'
+  import MergedConsole from './MergedConsole.svelte'
 
   let { group }: { group: Group } = $props()
 
   const services = $derived(app.workspace.services.filter((s) => s.group === group.id))
+  let tab = $state<'info' | 'logs'>('info')
   const running = $derived(services.filter((s) => isActive(app.statuses[s.id]?.state)).length)
 
   let envDraft = $state<EnvMap>({})
@@ -48,6 +50,13 @@
     <button class="btn run" disabled={services.length === 0 || running === services.length} onclick={() => app.startGroup(group.id)}><Icon name="play-all" size={14} /> 전체 시작</button>
   </header>
 
+  <nav class="tabs">
+    <button class:active={tab === 'info'} onclick={() => (tab = 'info')}><Icon name="gear" size={14} /> 서비스·설정</button>
+    <button class:active={tab === 'logs'} onclick={() => (tab = 'logs')}><Icon name="terminal" size={14} /> 통합 로그</button>
+  </nav>
+  {#if tab === 'logs'}
+    <div class="body"><MergedConsole serviceIds={services.map((s) => s.id)} /></div>
+  {:else}
   <div class="scroll">
     <section>
       <h3>서비스</h3>
@@ -89,6 +98,7 @@
       <p class="hint">그룹 안의 서비스는 지워지지 않고 '그룹 없음'으로 옮겨집니다.</p>
     </section>
   </div>
+  {/if}
 </div>
 
 <style>
@@ -109,6 +119,33 @@
   .folder {
     color: var(--folder);
     display: flex;
+  }
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 12px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .tabs button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px 7px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+  }
+  .tabs button.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  .body {
+    flex: 1;
+    min-height: 0;
   }
   h2 {
     margin: 0;

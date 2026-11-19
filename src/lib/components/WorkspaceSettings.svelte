@@ -8,6 +8,19 @@
   let variables = $state<EnvMap>({ ...(app.workspace.variables ?? {}) })
   let env = $state<EnvMap>({ ...(app.workspace.env ?? {}) })
   let rev = $state(0)
+  let exportRoot = $state('')
+  /** 내보낼 만한 프로젝트 폴더: 가져온 서비스의 원본 폴더와 경로 변수 */
+  const roots = $derived([
+    ...new Set([
+      ...app.workspace.services.map((s) => s.source?.root).filter((r): r is string => !!r),
+      ...Object.values(app.workspace.variables ?? {}).filter((v) => /^[A-Za-z]:[\\/]|^\//.test(v)),
+    ]),
+  ])
+
+  async function pickExportRoot() {
+    const p = await app.backend.pickFolder(exportRoot || undefined)
+    if (p) exportRoot = p
+  }
 
   const dirty = $derived(
     name !== app.workspace.name ||
@@ -63,6 +76,20 @@
       <h3>공통 환경변수</h3>
       <p class="hint">모든 서비스에 적용됩니다. 그룹·서비스에 같은 이름이 있으면 그쪽이 우선합니다.</p>
       <KeyValueEditor value={env} resetKey={'env:' + rev} onchange={(v) => (env = v)} keyPlaceholder="NAME" addLabel="환경변수 추가" />
+    </section>
+
+    <section>
+      <h3>프로젝트 공유 파일</h3>
+      <p class="hint">
+        이 폴더 아래에서 실행하는 서비스(의존 관계·프리셋 포함)를 <code>services-dashboard.json</code>으로 내보냅니다. 경로는 <code>${'{'}projectDir{'}'}</code>로
+        바뀌어 저장소에 함께 커밋해 팀과 나눠 쓸 수 있고, 다른 사람은 <b>가져오기</b>에서 그 폴더를 스캔하면 됩니다.
+      </p>
+      <div class="row">
+        <input class="text wide mono" bind:value={exportRoot} list="export-roots" placeholder="C:/Project/my-project" spellcheck="false" />
+        <datalist id="export-roots">{#each roots as r (r)}<option value={r}></option>{/each}</datalist>
+        <button class="btn" onclick={pickExportRoot}><Icon name="folder" size={14} /> 폴더 선택</button>
+        <button class="btn primary" disabled={!exportRoot.trim()} onclick={() => app.exportProject(exportRoot.trim())}><Icon name="file" size={14} /> 내보내기</button>
+      </div>
     </section>
 
     <section>
@@ -148,6 +175,10 @@
   }
   .text:focus {
     border-color: var(--accent);
+  }
+  .wide {
+    flex: 1;
+    width: auto;
   }
   .path {
     display: block;

@@ -1,5 +1,6 @@
 mod commands;
 mod importers;
+mod javamain;
 mod job;
 mod launch;
 mod logfile;
@@ -57,6 +58,14 @@ pub fn run() {
                 detect_env: runtime::DetectEnv::from_system(),
                 settings: Mutex::new(settings),
                 files: files.clone(),
+                restarts: Mutex::new(Default::default()),
+                on_error: {
+                    let handle = app.handle().clone();
+                    Box::new(move |e| {
+                        use tauri::Emitter;
+                        let _ = handle.emit(commands::EVENT_START_ERROR, e);
+                    })
+                },
             });
             app.manage(core.clone());
             shell::setup_tray(app.handle())?;
@@ -89,6 +98,9 @@ pub fn run() {
             commands::service_restart,
             commands::group_start,
             commands::group_stop,
+            commands::preset_start,
+            commands::preset_stop,
+            commands::project_export,
             commands::stop_all,
             commands::logs_get,
             commands::logs_clear,

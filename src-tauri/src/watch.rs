@@ -33,7 +33,8 @@ const NODE_READY: &[&str] = &[
     r"(?i)compiled successfully",
     r"(?i)webpack \S*\s*compiled",
     r"(?i)server (?:is )?(?:running|listening|started) (?:at|on)",
-    r"(?i)listening on (?:port )?(?:https?://)?\S*\d{2,5}",
+    // "Debugger listening on ws://…"(node --inspect)는 서버 준비가 아니므로 http 주소·호스트:포트·포트 번호만 본다
+    r"(?i)listening on (?:port )?(?:https?://\S+|[\w.\[\]-]*:?\d{2,5}\b)",
 ];
 
 pub fn strip_ansi(s: &str) -> Cow<'_, str> {
@@ -220,9 +221,18 @@ mod tests {
 
         let svc = Service { kind: ServiceKind::Npm, ..Default::default() };
         let spec = ready_spec(&svc, None).unwrap().unwrap();
-        for line in ["  ➜  Local:   http://localhost:5173/", "VITE v5.4.10  ready in 812 ms", "webpack 5.90.1 compiled successfully in 1234 ms", "Server listening on port 3000"] {
+        for line in [
+            "  ➜  Local:   http://localhost:5173/",
+            "VITE v5.4.10  ready in 812 ms",
+            "webpack 5.90.1 compiled successfully in 1234 ms",
+            "Server listening on port 3000",
+            "App listening on 127.0.0.1:8081",
+            "listening on http://localhost:4000",
+        ] {
             assert!(spec.matches(line), "{line}");
         }
+        // 디버그 실행 시 Node가 찍는 줄은 준비 신호가 아니다
+        assert!(!spec.matches("Debugger listening on ws://127.0.0.1:9229/063df330-08a5-439a-b62c-70f3c6e33dee"));
         // 셸 명령은 기본 판정이 없어 바로 '실행 중'
         let svc = Service { kind: ServiceKind::Shell, ..Default::default() };
         assert!(ready_spec(&svc, None).unwrap().is_none());

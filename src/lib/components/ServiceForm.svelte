@@ -5,7 +5,7 @@
   import { joinArgs, parsePorts, splitArgs, splitLines, splitList } from '../args'
   import { cleanForSave, normalizeForEdit, usesArgs, usesColorInject, usesJvmArgs, usesUtf8Inject } from '../service-edit'
   import type { EnvMap, Service, ServiceKind } from '../types'
-  import { DEFAULT_READY_HINT, JAVA_KINDS, KIND_LABELS, MAIN_CLASS_KINDS, MAVEN_KINDS, NODE_KINDS, SOURCE_LABELS, SPRING_KINDS, isActive } from '../types'
+  import { DEBUG_KINDS, DEFAULT_READY_HINT, JAVA_KINDS, KIND_LABELS, MAIN_CLASS_KINDS, MAVEN_KINDS, NODE_KINDS, SOURCE_LABELS, SPRING_KINDS, isActive } from '../types'
   import Icon from './Icon.svelte'
   import KeyValueEditor from './KeyValueEditor.svelte'
   import RuntimeSelect from './RuntimeSelect.svelte'
@@ -113,6 +113,27 @@
     if (env.FORCE_COLOR) rows.push(['FORCE_COLOR', env.FORCE_COLOR])
     return rows
   })
+
+  /** 의존 대상으로 고를 수 있는 서비스 (자기 자신과, 자신에게 의존하는 서비스는 순환이라 뺀다) */
+  const dependable = $derived.by(() => {
+    const dependents = new Set<string>([service.id])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const s of app.workspace.services) {
+        if (!dependents.has(s.id) && (s.dependsOn ?? []).some((d) => dependents.has(d))) {
+          dependents.add(s.id)
+          grew = true
+        }
+      }
+    }
+    return app.workspace.services.filter((s) => !dependents.has(s.id))
+  })
+
+  function toggleDep(id: string) {
+    const cur = draft.dependsOn ?? []
+    draft.dependsOn = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+  }
 
   function setInject(key: 'utf8' | 'color', on: boolean) {
     draft.inject = { ...(draft.inject ?? {}), [key]: on }
@@ -240,16 +261,36 @@
           </select>
           <label for="f-cmd">명령</label>
           <textarea id="f-cmd" rows="3" bind:value={draft.shell.command} placeholder="docker compose up redis" spellcheck="false" class="mono"></textarea>
-        {:else if kind === 'java-main'}
-          <span></span>
-          <p class="notice">java-main(메인 클래스 직접 실행)은 M4에서 지원할 예정입니다. 지금은 Spring Boot (Gradle/Maven) 타입을 사용하세요.</p>
+        {:else if kind === 'java-main' && draft.javaMain}
+          <label for="f-cpsrc">클래스패스</label>
+          <div>
+            <select id="f-cpsrc" bind:value={draft.javaMain.source}>
+              <option value="gradle">Gradle로 계산 (compile + runtimeClasspath)</option>
+              <option value="maven">Maven으로 계산 (compile + dependency:build-classpath)</option>
+              <option value="manual">직접 입력</option>
+            </select>
+            <p class="hint">처음 한 번 빌드 도구로 컴파일하고 클래스패스를 캐시합니다. 이후에는 바뀐 소스가 없으면 빌드 없이 바로 java로 실행합니다.</p>
+          </div>
+          {#if draft.javaMain.source === 'manual'}
+            <label for="f-cp">클래스패스 항목</label>
+            <textarea id="f-cp" rows="3" value={(draft.javaMain.classpath ?? []).join('\n')} onchange={(e) => draft.javaMain && (draft.javaMain.classpath = splitLines(e.currentTarget.value))} placeholder={'build/classes/java/main\nlibs/*.jar 대신 jar 경로를 한 줄에 하나씩'} spellcheck="false" class="mono"></textarea>
+          {:else}
+            <label for="f-jmod">{draft.javaMain.source === 'gradle' ? 'Gradle 프로젝트' : 'Maven 모듈'}</label>
+            <input id="f-jmod" bind:value={() => draft.javaMain?.module ?? '', (v) => draft.javaMain && (draft.javaMain.module = v)} placeholder={draft.javaMain.source === 'gradle' ? ':apps:api (비우면 루트)' : 'api (비우면 루트)'} spellcheck="false" class="mono" />
+            <label for="f-rebuild">빌드</label>
+            <select id="f-rebuild" bind:value={draft.javaMain.rebuild}>
+              <option value="auto">바뀐 소스·빌드 파일이 있을 때만 (권장)</option>
+              <option value="always">매번 빌드</option>
+              <option value="never">빌드하지 않음 (캐시만 사용)</option>
+            </select>
+          {/if}
         {/if}
 
         {#if MAIN_CLASS_KINDS.includes(kind)}
           <label for="f-main">메인 클래스</label>
           <div>
             <input id="f-main" bind:value={() => draft.mainClass ?? '', (v) => (draft.mainClass = v)} placeholder="com.example.Application (비우면 자동 감지)" spellcheck="false" class="mono" />
-            <p class="hint">모듈에 메인 클래스가 여러 개일 때 지정합니다.</p>
+            <p class="hint">{kind === 'java-main' ? '실행할 메인 클래스 (필수)' : '모듈에 메인 클래스가 여러 개일 때 지정합니다.'}</p>
           </div>
         {/if}
 
@@ -301,6 +342,60 @@
         </div>
       </section>
     {/if}
+
+    <section>
+      <h3>실행 순서 · 복구 · 디버그</h3>
+      <div class="grid">
+        <span class="label">의존 서비스</span>
+        <div>
+          {#if dependable.length}
+            <div class="deps">
+              {#each dependable as d (d.id)}
+                <button type="button" class="dep" class:on={(draft.dependsOn ?? []).includes(d.id)} onclick={() => toggleDep(d.id)}>
+                  {#if (draft.dependsOn ?? []).includes(d.id)}<Icon name="link" size={11} />{/if}{d.name}
+                </button>
+              {/each}
+            </div>
+          {:else}
+            <p class="hint">고를 수 있는 다른 서비스가 없습니다.</p>
+          {/if}
+          <p class="hint">고른 서비스가 먼저 준비(실행 중)된 뒤 이 서비스를 시작합니다. 그동안은 '대기 중'으로 표시됩니다.</p>
+        </div>
+
+        <span class="label">자동 재시작</span>
+        <div class="checks">
+          <label class="check">
+            <input type="checkbox" checked={!!draft.autoRestart} onchange={(e) => (draft.autoRestart = e.currentTarget.checked ? { maxRetries: 3 } : undefined)} />
+            비정상 종료되면 다시 시작
+          </label>
+          {#if draft.autoRestart}
+            <div class="inline">
+              <input aria-label="최대 재시작 횟수" type="number" min="1" max="20" class="num" value={draft.autoRestart.maxRetries ?? 3} onchange={(e) => draft.autoRestart && (draft.autoRestart.maxRetries = Number(e.currentTarget.value) || 3)} />
+              <span class="hint">회까지,</span>
+              <input aria-label="재시작 대기 시간" type="number" min="1" max="60" class="num" value={draft.autoRestart.delaySecs ?? 3} onchange={(e) => draft.autoRestart && (draft.autoRestart.delaySecs = Number(e.currentTarget.value) || 3)} />
+              <span class="hint">초 뒤 (재시도마다 두 배, 최대 60초)</span>
+            </div>
+            <p class="hint">1분 넘게 실행되면 횟수를 다시 셉니다. 실행 파일·준비(빌드) 실패는 재시작하지 않습니다.</p>
+          {/if}
+        </div>
+
+        {#if DEBUG_KINDS.includes(kind) && draft.debug}
+          <span class="label">디버그</span>
+          <div class="checks">
+            <div class="inline">
+              <input aria-label="디버그 포트" type="number" min="1" max="65535" class="num" value={draft.debug.port ?? ''} placeholder={NODE_KINDS.includes(kind) ? '9229' : '5005'} onchange={(e) => draft.debug && (draft.debug.port = e.currentTarget.value ? Number(e.currentTarget.value) : undefined)} />
+              <span class="hint">포트 — '디버그로 시작'(Shift+F9)할 때 {NODE_KINDS.includes(kind) ? '--inspect' : 'JDWP 에이전트'}를 붙입니다.</span>
+            </div>
+            {#if JAVA_KINDS.includes(kind)}
+              <label class="check">
+                <input type="checkbox" checked={draft.debug.suspend === true} onchange={(e) => draft.debug && (draft.debug.suspend = e.currentTarget.checked)} />
+                디버거가 붙을 때까지 기다리기 (suspend=y)
+              </label>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    </section>
 
     <section>
       <h3>환경</h3>
@@ -557,6 +652,31 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
+  }
+  .deps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .dep {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .dep.on {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--text);
   }
   .inline .hint {
     margin: 0;
@@ -579,13 +699,6 @@
     margin: 4px 0 0;
     color: var(--faint);
     font-size: 11.5px;
-  }
-  .notice {
-    margin: 0;
-    padding: 8px 10px;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--warn) 14%, transparent);
-    color: var(--warn);
   }
   .preview .cmd {
     display: block;

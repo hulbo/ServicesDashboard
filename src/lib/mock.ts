@@ -3,7 +3,7 @@
 
 import type { Backend } from './api'
 import { joinArgs } from './args'
-import type { AppSettings, Candidate, LogBatch, LogLine, RuntimeInfo, ScanResult, Service, ServiceStatus, Workspace } from './types'
+import type { AppSettings, Candidate, LogBatch, LogLine, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
 import { STREAM_ERR, STREAM_OUT, STREAM_SYS } from './types'
 
 const sample: Workspace = {
@@ -29,10 +29,12 @@ const sample: Workspace = {
       jvmArgs: ['--add-opens', 'java.base/java.lang=ALL-UNNAMED', '-Dfile.encoding=UTF-8'],
       runtime: { jdk: 'C:/Program Files/Java/jdk-17' },
       ports: [8080],
+      dependsOn: ['auth-api'],
     },
-    { id: 'auth-api', name: 'AuthApplication', group: 'server', type: 'maven-boot', cwd: '${var:ROOT}/auth', maven: { module: 'auth-api' }, ports: [8081] },
+    { id: 'auth-api', name: 'AuthApplication', group: 'server', type: 'maven-boot', cwd: '${var:ROOT}/auth', maven: { module: 'auth-api' }, ports: [8081], autoRestart: { maxRetries: 3 } },
     { id: 'batch', name: 'batch-worker', type: 'shell', shell: { command: 'docker compose up redis', shell: 'cmd' } },
   ],
+  presets: [{ id: 'pre-full', name: '풀스택', services: ['portal-front', 'portal-api'] }],
 }
 
 const viteLines = [
@@ -105,7 +107,8 @@ function mockScan(root: string): ScanResult {
   return {
     root: r,
     suggestedVar: (r.split('/').pop() || 'ROOT').toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
-    warnings: ['가져오지 않은 IntelliJ 구성: all (복합 구성은 M4 실행 프리셋에서 지원 예정)'],
+    warnings: ['가져오지 않은 VS Code 구성: attach (attach)'],
+    presets: [{ key: 'intellij-compound:.run/all.run.xml#all', name: 'all', origin: '.run/all.run.xml', members: ['intellij:.idea/workspace.xml#PortalApplication', 'intellij:.run/npm-portal.run.xml#portal'], missing: [] }],
     candidates: [
       mk(
         'intellij:.idea/workspace.xml#PortalApplication',
@@ -183,6 +186,7 @@ export function createMockBackend(): Backend {
   const timers = new Map<string, number[]>()
   const stateListeners = new Set<(s: ServiceStatus) => void>()
   const logListeners = new Set<(b: LogBatch[]) => void>()
+  const errorListeners = new Set<(e: StartError) => void>()
   let runId = 1
   let settings: AppSettings = { currentWorkspace: 'default', closeToTray: true, notifications: true, logFiles: { enabled: false, retentionDays: 7 } }
   const occupied = new Map<number, { pid: number; name: string }>([[5174, { pid: 4242, name: 'node.exe' }]])
@@ -235,7 +239,33 @@ export function createMockBackend(): Backend {
     }
   }
 
-  const start = async (id: string): Promise<ServiceStatus> => {
+  /** 의존 대상을 먼저 시작하고 준비될 때까지 '대기 중'으로 둔다 */
+  const launch = async (id: string, debug = false): Promise<void> => {
+    const svc = workspace.services.find((s) => s.id === id)
+    if (!svc) throw new Error(`서비스를 찾을 수 없습니다: ${id}`)
+    const cur = statuses.get(id)?.state
+    if (cur === 'running' || cur === 'starting' || cur === 'waiting') return
+    const deps = (svc.dependsOn ?? []).filter((d) => statuses.get(d)?.state !== 'running')
+    if (deps.length) {
+      emitState({ ...(statuses.get(id) ?? blank(id)), state: 'waiting' })
+      for (const d of deps) await launch(d)
+      for (let i = 0; i < 100 && deps.some((d) => statuses.get(d)?.state !== 'running'); i++) await new Promise((r) => setTimeout(r, 100))
+      if (statuses.get(id)?.state !== 'waiting') return
+    }
+    try {
+      await start(id, debug)
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e)
+      emitState({ ...(statuses.get(id) ?? blank(id)), state: 'failed', error })
+      errorListeners.forEach((cb) => cb({ id, name: svc.name, error }))
+    }
+  }
+
+  const blank = (id: string): ServiceStatus => ({
+    id, state: 'stopped', pid: null, exitCode: null, startedAt: null, endedAt: null, runId: 0, command: null, error: null, ports: [], urls: [], readyAt: null, debugPort: null,
+  })
+
+  const start = async (id: string, debug = false): Promise<ServiceStatus> => {
     const svc = workspace.services.find((s) => s.id === id)
     if (!svc) throw new Error(`서비스를 찾을 수 없습니다: ${id}`)
     if (statuses.get(id)?.state === 'running') throw new Error('이미 실행 중입니다.')
@@ -255,6 +285,7 @@ export function createMockBackend(): Backend {
       ports: [],
       urls: [],
       readyAt: null,
+      debugPort: debug ? (['npm', 'node'].includes(svc.type) ? 9229 : 5005) : null,
     }
     const ready = (ms: number, urls: string[]) =>
       later(id, ms, () => {
@@ -307,7 +338,11 @@ export function createMockBackend(): Backend {
 
   const stop = async (id: string) => {
     const s = statuses.get(id)
-    if (!s || s.state !== 'running') return
+    if (s?.state === 'waiting') {
+      emitState({ ...s, state: 'stopped' })
+      return
+    }
+    if (!s || (s.state !== 'running' && s.state !== 'starting')) return
     clearTimers(id)
     emitState({ ...s, state: 'stopping' })
     await new Promise((r) => setTimeout(r, 300))
@@ -330,17 +365,28 @@ export function createMockBackend(): Backend {
       return structuredClone(workspace)
     },
     statuses: async () => [...statuses.values()],
-    start,
+    start: (id, debug) => {
+      void launch(id, debug)
+      return Promise.resolve()
+    },
     stop,
-    restart: async (id) => {
+    restart: async (id, debug) => {
       await stop(id)
-      return start(id)
+      void launch(id, debug)
     },
     startGroup: async (gid) => {
-      for (const s of workspace.services.filter((s) => s.group === gid)) {
-        if (statuses.get(s.id)?.state !== 'running') await start(s.id)
-      }
-      return []
+      for (const s of workspace.services.filter((s) => s.group === gid)) void launch(s.id)
+    },
+    startPreset: async (pid) => {
+      for (const id of workspace.presets?.find((p) => p.id === pid)?.services ?? []) void launch(id)
+    },
+    stopPreset: async (pid) => {
+      await Promise.all((workspace.presets?.find((p) => p.id === pid)?.services ?? []).map(stop))
+    },
+    projectExport: async (root) => `${root.replace(/[\\/]+$/, '')}/services-dashboard.json`,
+    onStartError: async (cb) => {
+      errorListeners.add(cb)
+      return () => errorListeners.delete(cb)
     },
     stopGroup: async (gid) => {
       await Promise.all(workspace.services.filter((s) => s.group === gid).map((s) => stop(s.id)))

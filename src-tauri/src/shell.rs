@@ -42,6 +42,16 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         if !ws.groups.is_empty() {
             menu.append(&PredefinedMenuItem::separator(app)?)?;
         }
+        if !ws.presets.is_empty() {
+            let items: Vec<MenuItem<R>> = ws
+                .presets
+                .iter()
+                .map(|p| MenuItem::with_id(app, format!("pstart:{}", p.id), &p.name, true, None::<&str>))
+                .collect::<tauri::Result<_>>()?;
+            let refs: Vec<&dyn tauri::menu::IsMenuItem<R>> = items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<R>).collect();
+            menu.append(&Submenu::with_items(app, "프리셋 시작", true, &refs)?)?;
+            menu.append(&PredefinedMenuItem::separator(app)?)?;
+        }
     }
     menu.append(&MenuItem::with_id(app, "stop_all", "실행 중인 서비스 모두 중지", true, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
@@ -90,18 +100,24 @@ fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
         }
         _ => {
             if let Some(gid) = id.strip_prefix("gstart:") {
-                let gid = gid.to_string();
-                let app = app.clone();
-                std::thread::spawn(move || {
-                    for e in core.start_group(&gid) {
-                        notify(&app, &format!("{} 시작 실패", e.name), &e.error);
+                if let Ok(ids) = core.group_ids(gid) {
+                    if let Err(e) = core.launch(ids, false, true) {
+                        notify(app, "그룹 시작 실패", &e);
                     }
-                });
+                }
             } else if let Some(gid) = id.strip_prefix("gstop:") {
                 let gid = gid.to_string();
                 std::thread::spawn(move || {
-                    let _ = core.stop_group(&gid);
+                    if let Ok(ids) = core.group_ids(&gid) {
+                        let _ = core.stop_ids(&ids);
+                    }
                 });
+            } else if let Some(pid) = id.strip_prefix("pstart:") {
+                if let Ok(ids) = core.preset_ids(pid) {
+                    if let Err(e) = core.launch(ids, false, true) {
+                        notify(app, "프리셋 시작 실패", &e);
+                    }
+                }
             }
         }
     }
