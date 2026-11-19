@@ -354,7 +354,7 @@ export function createMockBackend(): Backend {
   return {
     isMock: true,
     appInfo: async () => ({
-      version: '0.1.0 (미리보기)',
+      version: '0.1.1 (미리보기)',
       configDir: 'C:/Users/me/AppData/Roaming/ServicesDashboard',
       workspacePath: 'C:/Users/me/AppData/Roaming/ServicesDashboard/workspaces/default.json',
     }),
