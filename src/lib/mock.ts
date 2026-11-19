@@ -328,16 +328,17 @@ export function createMockBackend(): Backend {
       )
     } else if (svc.type === 'gradle-boot' || svc.type === 'maven-boot' || svc.type === 'jar') {
       bootLines.forEach((l, i) => later(id, 300 + i * 30, () => push(id, STREAM_OUT, l)))
+      const port = svc.ports?.[0] ?? 8080
       const boot: [number, Parameters<typeof bootLog>][] = [
         [900, ['INFO', 'k.e.portal.PortalApplication', 'Starting PortalApplication using Java 17.0.15 with PID 12345']],
         [950, ['INFO', 'k.e.portal.PortalApplication', 'The following 1 profile is active: "local"']],
-        [1500, ['INFO', 'o.s.b.w.embedded.tomcat.TomcatWebServer', 'Tomcat initialized with port 8080 (http)']],
+        [1500, ['INFO', 'o.s.b.w.embedded.tomcat.TomcatWebServer', `Tomcat initialized with port ${port} (http)`]],
         [1700, ['WARN', 'o.s.b.a.orm.jpa.JpaBaseConfiguration', 'spring.jpa.open-in-view is enabled by default.']],
-        [2300, ['INFO', 'o.s.b.w.embedded.tomcat.TomcatWebServer', 'Tomcat started on port 8080 (http) with context path \'/\'']],
+        [2300, ['INFO', 'o.s.b.w.embedded.tomcat.TomcatWebServer', `Tomcat started on port ${port} (http) with context path '/'`]],
         [2350, ['INFO', 'k.e.portal.PortalApplication', 'Started PortalApplication in 3.412 seconds (process running for 3.9)']],
       ]
       for (const [ms, args] of boot) later(id, ms, () => push(id, STREAM_OUT, bootLog(...args)))
-      ready(2360, ['http://localhost:8080/'])
+      ready(2360, [`http://localhost:${port}/`])
       later(id, 2600, () => {
         push(id, STREAM_OUT, bootLog('ERROR', 'o.a.c.c.C.[.[.[/].[dispatcherServlet]', '요청 처리 중 오류가 발생했습니다 (한글 로그 예시)'))
         push(id, STREAM_ERR, 'java.lang.IllegalStateException: 샘플 예외')

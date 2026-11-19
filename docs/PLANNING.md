@@ -1,6 +1,8 @@
 # Services Dashboard 기획서
 
-> 문서 버전 0.5 · 2026-11-19 · 진행 상황: M0~M4 완료 (기획 범위 전체 구현)
+> 문서 버전 0.6 · 2026-11-20 · 진행 상황: M0~M5 완료 (기획 범위 전체 구현)
+>
+> 왜 만들었는지, 무엇을 어떻게 만들기로 했는지를 담은 기획서다. 앱 소개는 [README](../README.md), 사용법은 [사용 설명서](MANUAL.md), 빌드·코드 구조는 [개발 가이드](DEVELOPMENT.md)에 있다.
 
 IntelliJ를 켜지 않고도 로컬 개발 서비스(Node, Spring Boot, Maven, Gradle, 임의 명령)를 한 화면에서 띄우고, 끄고, 로그를 보는 **가벼운 데스크톱 서비스 대시보드**.
 
@@ -392,6 +394,8 @@ flowchart LR
 | Event | `service://metrics` | 메모리·CPU |
 
 ### 7.5 저장소 구조 (예정)
+
+기획 당시의 초안이다. 실제 구조는 [개발 가이드](DEVELOPMENT.md#코드-구조)에 있다.
 
 ```
 ServicesDashboard/
