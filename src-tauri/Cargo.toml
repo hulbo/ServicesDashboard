@@ -1,6 +1,6 @@
 [package]
 name = "services-dashboard"
-version = "0.1.5"
+version = "0.1.6"
 description = "IntelliJ 없이 로컬 개발 서비스를 띄우는 가벼운 서비스 대시보드"
 authors = ["hulbo"]
 license = "MIT"
