@@ -1,6 +1,7 @@
 // 앱 전역 상태 (Svelte 5 runes)
 
 import { createBackend, errorMessage, type Backend } from './api'
+import { serviceColorMap } from './colors'
 import { consoleRow, fontsOf } from './fonts'
 import { detectHeadChanges, headLabel } from './git'
 import { applyImport, type ImportItem, type PresetItem } from './importing'
@@ -602,6 +603,12 @@ class AppState {
     this.sidebarPinned = !this.sidebarPinned
     this.sidebarOpen = false
     writeLocal(PINNED_KEY, this.sidebarPinned)
+  }
+
+  /** 서비스별 구분 색 (통합 로그 이름·기둥 아이콘 테두리) */
+  serviceColors = $derived(serviceColorMap(this.workspace))
+  colorOf(id: string): string {
+    return this.serviceColors.get(id) ?? 'var(--muted)'
   }
 
   /** 실행 중(시작·대기·중지 중 포함)인 서비스, 트리 순서대로 */

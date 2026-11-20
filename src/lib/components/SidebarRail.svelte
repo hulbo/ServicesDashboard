@@ -28,6 +28,7 @@
       <button
         class="svc"
         class:selected={selectedId === s.id}
+        style:--c={app.colorOf(s.id)}
         title={badgeTitle(s.name, STATE_LABELS[st?.state ?? 'stopped'], st?.ports ?? [])}
         onclick={() => app.select({ kind: 'service', id: s.id })}
       >
@@ -87,6 +88,7 @@
     scrollbar-width: none;
     padding: 2px 0;
   }
+  /* 테두리는 통합 로그의 서비스 이름과 같은 색(--c) */
   .svc {
     position: relative;
     display: grid;
@@ -94,7 +96,7 @@
     flex: none;
     width: 32px;
     height: 32px;
-    border: 1px solid var(--border-strong);
+    border: 1.5px solid var(--c, var(--border-strong));
     border-radius: 7px;
     background: var(--panel-2);
     color: var(--text);
@@ -102,12 +104,11 @@
     cursor: pointer;
   }
   .svc:hover {
-    border-color: var(--muted);
-    background: var(--hover);
+    background: color-mix(in srgb, var(--c) 14%, var(--panel-2));
   }
   .svc.selected {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent);
+    background: color-mix(in srgb, var(--c) 22%, var(--panel-2));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 45%, transparent);
   }
   .abbr {
     font-size: 11px;

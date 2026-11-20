@@ -13,7 +13,8 @@
   const OVERSCAN = 30
   /** 서비스마다 최근 이만큼만 합친다 (합치는 비용을 일정하게) */
   const PER_SERVICE = 4000
-  const COLORS = ['--ansi-12', '--ansi-10', '--ansi-13', '--ansi-14', '--ansi-11', '--ansi-9', '--ansi-6', '--ansi-5']
+  /** 서비스별 색: 트리 순서로 정한 같은 색을 기둥 아이콘 테두리도 쓴다 */
+  const colors = $derived(serviceIds.map((id) => app.colorOf(id)))
 
   type Row = { key: string; idx: number; line: ViewLine }
 
@@ -142,7 +143,7 @@
     </label>
     <div class="chips">
       {#each serviceIds as id, i (id)}
-        <button class="chip" class:off={hidden.includes(id)} style="--c:var({COLORS[i % COLORS.length]})" title="보이기/숨기기" onclick={() => toggle(id)}>
+        <button class="chip" class:off={hidden.includes(id)} style="--c:{colors[i]}" title="보이기/숨기기" onclick={() => toggle(id)}>
           <span class="dot"></span>{names[i]}
         </button>
       {/each}
@@ -169,7 +170,7 @@
       <div class="spacer-box" style="height:{rows.length * ROW}px">
         <div class="rows" style="transform:translateY({first * ROW}px)">
           {#each visible as r (r.key)}
-            <div class="line s{r.line.stream} lv{r.line.level}"><span class="who" style="color:var({COLORS[r.idx % COLORS.length]}); width:{nameWidth + 1}ch">{names[r.idx]}</span>{#each decorate(r.line.segments, r.line.plain, queryRe) as p, i (i)}<span style={p.style} class:match={p.match}>{p.text}</span>{/each}</div>
+            <div class="line s{r.line.stream} lv{r.line.level}"><span class="who" style="color:{colors[r.idx]}; width:{nameWidth + 1}ch">{names[r.idx]}</span>{#each decorate(r.line.segments, r.line.plain, queryRe) as p, i (i)}<span style={p.style} class:match={p.match}>{p.text}</span>{/each}</div>
           {/each}
         </div>
       </div>
