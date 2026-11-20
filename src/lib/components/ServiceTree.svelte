@@ -3,12 +3,41 @@
   import { errorMessage } from '../api'
   import type { Group, Preset, Service } from '../types'
   import { DEBUG_KINDS, isActive } from '../types'
-  import Icon from './Icon.svelte'
+  import Icon, { type IconName } from './Icon.svelte'
+  import { toolbarFit } from '../toolbar'
   import StatusDot from './StatusDot.svelte'
   import ContextMenu, { type MenuEntry } from './ContextMenu.svelte'
 
   let filter = $state('')
   let menu = $state<{ x: number; y: number; items: MenuEntry[] } | null>(null)
+
+  // ── 도구 모음: 사이드바가 좁으면 오른쪽 도구부터 "더 보기(⋯)" 메뉴로 ──
+  type Tool = { label: string; title: string; icon: IconName; group: number; action: () => void; active?: boolean; disabled?: boolean; danger?: boolean }
+  const tools = $derived<Tool[]>([
+    { label: '서비스 추가', title: '서비스 추가', icon: 'plus', group: 0, action: () => app.addService(app.selection?.kind === 'group' ? app.selection.id : undefined) },
+    { label: '그룹 추가', title: '그룹 추가', icon: 'folder-plus', group: 0, action: () => app.addGroup() },
+    { label: '가져오기', title: '가져오기 (IntelliJ·package.json·Spring Boot)', icon: 'import', group: 0, active: app.selection?.kind === 'import', action: () => app.select({ kind: 'import' }) },
+    { label: '브랜치', title: '브랜치 (git 브랜치 보기·전환)', icon: 'branch', group: 0, active: app.selection?.kind === 'branches', action: () => app.openBranches() },
+    { label: '전체 중지', title: '실행 중인 서비스 모두 중지', icon: 'stop-all', group: 1, danger: true, disabled: app.runningCount === 0, action: () => app.stopAll() },
+    { label: '런타임', title: '런타임 (JDK·Node·Maven)', icon: 'runtime', group: 2, active: app.selection?.kind === 'runtimes', action: () => app.select({ kind: 'runtimes' }) },
+    { label: '설정', title: '설정 (글꼴·트레이·알림·로그 파일)', icon: 'gear', group: 2, active: app.selection?.kind === 'settings', action: () => app.select({ kind: 'settings' }) },
+    { label: '워크스페이스 설정', title: '워크스페이스 설정 (변수·공통 환경변수)', icon: 'workspace', group: 2, active: app.selection?.kind === 'workspace', action: () => app.select({ kind: 'workspace' }) },
+  ])
+  let toolbarWidth = $state(0)
+  /** 바로 보일 도구 수 (toolbar 좌우 여백 16px 제외) */
+  const shownCount = $derived(toolbarWidth ? toolbarFit(tools.map((t) => t.group), toolbarWidth - 16) : tools.length)
+  const shown = $derived(tools.slice(0, shownCount))
+  const hidden = $derived(tools.slice(shownCount))
+
+  function openMore(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const items: MenuEntry[] = []
+    hidden.forEach((t, i) => {
+      if (i > 0 && t.group !== hidden[i - 1].group) items.push('separator')
+      items.push({ label: t.label, icon: t.icon, disabled: t.disabled, danger: t.danger && !t.disabled, action: t.action })
+    })
+    menu = { x: r.left, y: r.bottom + 2, items }
+  }
   let drag = $state<{ kind: 'service' | 'group'; id: string } | null>(null)
   let dropTarget = $state<{ id: string; mode: 'before' | 'into' } | null>(null)
   let listEl: HTMLDivElement | undefined = $state()
@@ -263,31 +292,21 @@
 </script>
 
 <div class="tree-panel">
-  <div class="toolbar">
-    <button class="tool" title="서비스 추가" onclick={() => app.addService(app.selection?.kind === 'group' ? app.selection.id : undefined)}>
-      <Icon name="plus" />
-    </button>
-    <button class="tool" title="그룹 추가" onclick={() => app.addGroup()}><Icon name="folder-plus" /></button>
-    <button class="tool" class:active={app.selection?.kind === 'import'} title="가져오기 (IntelliJ·package.json·Spring Boot)" onclick={() => app.select({ kind: 'import' })}>
-      <Icon name="import" />
-    </button>
-    <button class="tool" class:active={app.selection?.kind === 'branches'} title="브랜치 (git 브랜치 보기·전환)" onclick={() => app.openBranches()}>
-      <Icon name="branch" />
-    </button>
-    <span class="sep"></span>
-    <button class="tool stop" title="실행 중인 서비스 모두 중지" disabled={app.runningCount === 0} onclick={() => app.stopAll()}>
-      <Icon name="stop-all" />
-    </button>
-    <span class="spacer"></span>
-    <button class="tool" class:active={app.selection?.kind === 'runtimes'} title="런타임 (JDK·Node·Maven)" onclick={() => app.select({ kind: 'runtimes' })}>
-      <Icon name="runtime" />
-    </button>
-    <button class="tool" class:active={app.selection?.kind === 'settings'} title="설정 (트레이·알림·로그 파일)" onclick={() => app.select({ kind: 'settings' })}>
-      <Icon name="gear" />
-    </button>
-    <button class="tool" class:active={app.selection?.kind === 'workspace'} title="워크스페이스 설정 (변수·공통 환경변수)" onclick={() => app.select({ kind: 'workspace' })}>
-      <Icon name="workspace" />
-    </button>
+  <div class="toolbar" bind:clientWidth={toolbarWidth}>
+    {#each shown as t, i (t.label)}
+      {#if i > 0 && t.group !== shown[i - 1].group}
+        {#if t.group === 1}<span class="sep"></span>{:else}<span class="spacer"></span>{/if}
+      {/if}
+      <button class="tool" class:stop={t.danger} class:active={t.active} title={t.title} disabled={t.disabled} onclick={t.action}>
+        <Icon name={t.icon} />
+      </button>
+    {/each}
+    {#if hidden.length}
+      <span class="spacer"></span>
+      <button class="tool more" class:active={hidden.some((t) => t.active)} title="더 보기: {hidden.map((t) => t.label).join(' · ')}" aria-label="더 보기" onclick={openMore}>
+        <Icon name="more" />
+      </button>
+    {/if}
   </div>
 
   <label class="filter">
@@ -475,6 +494,8 @@
     display: flex;
     align-items: center;
     gap: 2px;
+    min-width: 0;
+    overflow: hidden;
     padding: 6px 8px;
     border-bottom: 1px solid var(--border);
   }

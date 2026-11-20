@@ -30,6 +30,7 @@
     | 'link'
     | 'branch'
     | 'grip'
+    | 'more'
 </script>
 
 <script lang="ts">
@@ -126,6 +127,8 @@
     <circle cx="5" cy="12.5" r="1.5" />
     <circle cx="11" cy="4.5" r="1.5" />
     <path d="M5 5v6M11 6c0 3.2-6 2.6-6 5" />
+  {:else if name === 'more'}
+    <g fill="currentColor" stroke="none"><circle cx="3.5" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="12.5" cy="8" r="1.3" /></g>
   {:else if name === 'grip'}
     <g fill="currentColor" stroke="none">
       <circle cx="6" cy="4" r="1.1" /><circle cx="10" cy="4" r="1.1" />
