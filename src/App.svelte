@@ -42,7 +42,8 @@
   }
 
   function scheduleClose() {
-    clearTimeout(showTimer)
+    // 기둥 위에 있는 동안은 펼치려던 것을 취소하지 않는다
+    if (!overRail) clearTimeout(showTimer)
     clearTimeout(hideTimer)
     hideTimer = setTimeout(() => {
       if (!overRail && !overSidebar && !typingInSidebar()) app.sidebarOpen = false
@@ -52,10 +53,22 @@
   function railEnter() {
     overRail = true
     clearTimeout(hideTimer)
-    if (!app.sidebarOpen) showTimer = setTimeout(() => (app.sidebarOpen = true), OPEN_DELAY)
+    if (!app.sidebarOpen) {
+      clearTimeout(showTimer)
+      showTimer = setTimeout(() => {
+        showTimer = undefined
+        if (overRail) app.sidebarOpen = true
+      }, OPEN_DELAY)
+    }
+  }
+  /** mouseenter를 놓쳤거나 펼치기가 취소됐어도, 기둥 위에서 마우스를 움직이면 펼친다 */
+  function railMove() {
+    if (!overRail || (!app.sidebarOpen && showTimer === undefined)) railEnter()
   }
   function railLeave() {
     overRail = false
+    clearTimeout(showTimer)
+    showTimer = undefined
     scheduleClose()
   }
   function sidebarEnter() {
@@ -66,9 +79,9 @@
     overSidebar = false
     if (!app.sidebarPinned) scheduleClose()
   }
-  function sidebarFocusOut() {
-    // 입력칸에서 빠져나갔고 마우스도 밖에 있으면 접는다
-    if (!app.sidebarPinned) scheduleClose()
+  function sidebarFocusOut(e: FocusEvent) {
+    // 입력칸에서 빠져나갔고 마우스도 밖에 있으면 접는다 (버튼 등에서 포커스가 빠지는 것은 상관없다)
+    if (!app.sidebarPinned && (e.target as HTMLElement | null)?.closest?.('input, textarea, select')) scheduleClose()
   }
   function openSidebar() {
     clearTimeout(hideTimer)
@@ -158,7 +171,7 @@
 {:else}
   <div class="app" class:autohide={!app.sidebarPinned} style="--sidebar:{app.sidebarWidth}px">
     {#if !app.sidebarPinned}
-      <SidebarRail onenter={railEnter} onleave={railLeave} onopen={openSidebar} />
+      <SidebarRail onenter={railEnter} onleave={railLeave} onmove={railMove} onopen={openSidebar} />
     {/if}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <aside

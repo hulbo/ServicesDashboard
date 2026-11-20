@@ -7,14 +7,14 @@
   import Icon from './Icon.svelte'
   import StatusDot from './StatusDot.svelte'
 
-  let { onenter, onleave, onopen }: { onenter: () => void; onleave: () => void; onopen: () => void } = $props()
+  let { onenter, onleave, onmove, onopen }: { onenter: () => void; onleave: () => void; onmove: () => void; onopen: () => void } = $props()
 
   const active = $derived(app.activeServices)
   const selectedId = $derived(app.selection?.kind === 'service' ? app.selection.id : null)
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="rail" onmouseenter={onenter} onmouseleave={onleave}>
+<div class="rail" onmouseenter={onenter} onmouseleave={onleave} onmousemove={onmove}>
   <button class="tool" title="사이드바 고정 (Ctrl+B)" aria-label="사이드바 고정" onclick={() => app.toggleSidebarPinned()}>
     <Icon name="pin" />
   </button>
