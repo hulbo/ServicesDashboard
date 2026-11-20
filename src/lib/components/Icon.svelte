@@ -31,6 +31,9 @@
     | 'branch'
     | 'grip'
     | 'more'
+    | 'pin'
+    | 'sidebar-hide'
+    | 'list'
 </script>
 
 <script lang="ts">
@@ -127,6 +130,13 @@
     <circle cx="5" cy="12.5" r="1.5" />
     <circle cx="11" cy="4.5" r="1.5" />
     <path d="M5 5v6M11 6c0 3.2-6 2.6-6 5" />
+  {:else if name === 'pin'}
+    <path d="M6 2.5h4M6.8 2.5v4L4.5 9h7L9.2 6.5v-4M8 9v4.5" />
+  {:else if name === 'sidebar-hide'}
+    <rect x="2" y="3" width="12" height="10" rx="1.5" />
+    <path d="M6 3v10M11 6.5L9.5 8l1.5 1.5" />
+  {:else if name === 'list'}
+    <path d="M3 4.5h10M3 8h10M3 11.5h10" />
   {:else if name === 'more'}
     <g fill="currentColor" stroke="none"><circle cx="3.5" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="12.5" cy="8" r="1.3" /></g>
   {:else if name === 'grip'}

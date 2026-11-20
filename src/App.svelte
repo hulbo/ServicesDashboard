@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { app } from './lib/state.svelte'
   import Icon from './lib/components/Icon.svelte'
   import ServiceTree from './lib/components/ServiceTree.svelte'
@@ -15,6 +15,7 @@
   import { headLabel } from './lib/git'
   import { applyFonts } from './lib/fonts'
   import Toasts from './lib/components/Toasts.svelte'
+  import SidebarRail from './lib/components/SidebarRail.svelte'
 
   let initError = $state<string | null>(null)
 
@@ -24,6 +25,55 @@
   onMount(() => {
     app.init().catch((e) => (initError = String(e)))
   })
+
+  // ── 사이드바 자동 숨김: 기둥이나 펼친 목록 위에 마우스가 있으면 펼치고, 벗어나면 잠시 뒤 접는다 ──
+  let sidebarEl: HTMLElement | undefined = $state()
+  let overRail = false
+  let overSidebar = false
+  let showTimer: ReturnType<typeof setTimeout> | undefined
+  let hideTimer: ReturnType<typeof setTimeout> | undefined
+  const OPEN_DELAY = 150
+  const CLOSE_DELAY = 350
+
+  /** 검색·이름 바꾸기처럼 사이드바 안에서 입력 중이면 마우스가 벗어나도 접지 않는다 */
+  const typingInSidebar = () => {
+    const el = document.activeElement as HTMLElement | null
+    return !!el && !!sidebarEl?.contains(el) && !!el.closest('input, textarea, select')
+  }
+
+  function scheduleClose() {
+    clearTimeout(showTimer)
+    clearTimeout(hideTimer)
+    hideTimer = setTimeout(() => {
+      if (!overRail && !overSidebar && !typingInSidebar()) app.sidebarOpen = false
+    }, CLOSE_DELAY)
+  }
+
+  function railEnter() {
+    overRail = true
+    clearTimeout(hideTimer)
+    if (!app.sidebarOpen) showTimer = setTimeout(() => (app.sidebarOpen = true), OPEN_DELAY)
+  }
+  function railLeave() {
+    overRail = false
+    scheduleClose()
+  }
+  function sidebarEnter() {
+    overSidebar = true
+    clearTimeout(hideTimer)
+  }
+  function sidebarLeave() {
+    overSidebar = false
+    if (!app.sidebarPinned) scheduleClose()
+  }
+  function sidebarFocusOut() {
+    // 입력칸에서 빠져나갔고 마우스도 밖에 있으면 접는다
+    if (!app.sidebarPinned) scheduleClose()
+  }
+  function openSidebar() {
+    clearTimeout(hideTimer)
+    app.sidebarOpen = true
+  }
 
   function onKeydown(e: KeyboardEvent) {
     const svc = app.selectedService
@@ -42,9 +92,16 @@
     } else if ((e.key === 'F5' || (e.ctrlKey && (e.key === 'r' || e.key === 'R'))) && app.ready && !app.backend.isMock) {
       // 실수로 화면을 새로 고치지 않게 막는다 (서비스는 계속 실행되지만 화면 상태가 초기화된다).
       e.preventDefault()
+    } else if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+      // 사이드바 고정 ↔ 자동 숨김
+      e.preventDefault()
+      app.toggleSidebarPinned()
+    } else if (e.key === 'Escape' && !app.sidebarPinned && app.sidebarOpen && !(e.target as HTMLElement | null)?.closest?.('input, textarea, select, .menu')) {
+      app.sidebarOpen = false
     } else if (e.ctrlKey && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault()
-      document.querySelector<HTMLInputElement>('.filter input')?.focus()
+      if (!app.sidebarPinned) openSidebar()
+      void tick().then(() => document.querySelector<HTMLInputElement>('.filter input')?.focus())
     } else if (
       e.ctrlKey &&
       !e.altKey &&
@@ -99,12 +156,25 @@
     </div>
   </div>
 {:else}
-  <div class="app" style="--sidebar:{app.sidebarWidth}px">
-    <aside class="sidebar">
+  <div class="app" class:autohide={!app.sidebarPinned} style="--sidebar:{app.sidebarWidth}px">
+    {#if !app.sidebarPinned}
+      <SidebarRail onenter={railEnter} onleave={railLeave} onopen={openSidebar} />
+    {/if}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <aside
+      class="sidebar"
+      class:open={app.sidebarOpen}
+      bind:this={sidebarEl}
+      onmouseenter={sidebarEnter}
+      onmouseleave={sidebarLeave}
+      onfocusout={sidebarFocusOut}
+    >
       <ServiceTree />
     </aside>
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="splitter" onpointerdown={startResize} ondblclick={() => app.setSidebarWidth(300)}></div>
+    {#if app.sidebarPinned}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="splitter" onpointerdown={startResize} ondblclick={() => app.setSidebarWidth(300)}></div>
+    {/if}
     <main class="main">
       {#if app.selectedService}
         {#key app.selectedService.id}
@@ -144,6 +214,7 @@
             <dt>Ctrl+F5</dt><dd>재시작</dd>
             <dt>Shift+F9</dt><dd>디버그로 시작</dd>
             <dt>Ctrl+K</dt><dd>서비스 검색</dd>
+            <dt>Ctrl+B</dt><dd>사이드바 고정 / 자동 숨김</dd>
             <dt>F2</dt><dd>이름 바꾸기</dd>
           </dl>
         </div>
@@ -176,6 +247,7 @@
 
 <style>
   .app {
+    position: relative;
     display: grid;
     grid-template-columns: var(--sidebar) 4px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) 24px;
@@ -185,6 +257,45 @@
     grid-row: 1;
     min-width: 0;
     border-right: 1px solid var(--border);
+  }
+  /* 자동 숨김: 왼쪽 기둥(44px) + 본문. 목록은 기둥 오른쪽에 겹쳐서 펼쳐진다 */
+  .app.autohide {
+    --rail: 44px;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+  }
+  /* 열을 직접 정한다: .main은 grid-row가 정해져 있어 자동 배치 때 기둥보다 먼저 1열을 차지한다 */
+  .app.autohide :global(.rail) {
+    grid-row: 1;
+    grid-column: 1;
+  }
+  .app.autohide .main {
+    grid-column: 2;
+  }
+  .app.autohide .sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 24px;
+    left: var(--rail);
+    z-index: 40;
+    width: var(--sidebar);
+    background: var(--panel);
+    box-shadow: 6px 0 18px rgb(0 0 0 / 0.35);
+    transform: translateX(calc(-100% - var(--rail)));
+    visibility: hidden;
+    transition:
+      transform 0.16s ease,
+      visibility 0s linear 0.16s;
+  }
+  .app.autohide .sidebar.open {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.16s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .app.autohide .sidebar,
+    .app.autohide .sidebar.open {
+      transition: none;
+    }
   }
   .splitter {
     grid-row: 1;

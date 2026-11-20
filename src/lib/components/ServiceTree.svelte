@@ -22,6 +22,9 @@
     { label: '런타임', title: '런타임 (JDK·Node·Maven)', icon: 'runtime', group: 2, active: app.selection?.kind === 'runtimes', action: () => app.select({ kind: 'runtimes' }) },
     { label: '설정', title: '설정 (글꼴·트레이·알림·로그 파일)', icon: 'gear', group: 2, active: app.selection?.kind === 'settings', action: () => app.select({ kind: 'settings' }) },
     { label: '워크스페이스 설정', title: '워크스페이스 설정 (변수·공통 환경변수)', icon: 'workspace', group: 2, active: app.selection?.kind === 'workspace', action: () => app.select({ kind: 'workspace' }) },
+    app.sidebarPinned
+      ? { label: '사이드바 자동 숨기기', title: '사이드바 자동 숨기기: 왼쪽 기둥만 남기고, 마우스를 올리면 펼침 (Ctrl+B)', icon: 'sidebar-hide', group: 2, action: () => app.toggleSidebarPinned() }
+      : { label: '사이드바 고정', title: '사이드바 고정 (Ctrl+B)', icon: 'pin', group: 2, action: () => app.toggleSidebarPinned() },
   ])
   let toolbarWidth = $state(0)
   /** 바로 보일 도구 수 (toolbar 좌우 여백 16px 제외) */

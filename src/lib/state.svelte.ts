@@ -30,6 +30,7 @@ const GIT_POLL_MS = 3000
 
 const COLLAPSE_KEY = 'sd.collapsed'
 const SIDEBAR_KEY = 'sd.sidebarWidth'
+const PINNED_KEY = 'sd.sidebarPinned'
 
 function readLocal<T>(key: string, fallback: T): T {
   try {
@@ -65,6 +66,10 @@ class AppState {
   tab = $state<DetailTab>('console')
   collapsed = $state<Record<string, boolean>>(readLocal(COLLAPSE_KEY, {}))
   sidebarWidth = $state<number>(readLocal(SIDEBAR_KEY, 300))
+  /** 사이드바 고정. 끄면 왼쪽 기둥만 남고, 기둥에 마우스를 올리면 목록이 펼쳐진다 */
+  sidebarPinned = $state<boolean>(readLocal(PINNED_KEY, true))
+  /** 자동 숨김일 때 목록이 펼쳐져 있는지 */
+  sidebarOpen = $state(false)
   renaming = $state<string | null>(null)
   toasts = $state<Toast[]>([])
   /** 서비스별 로그 변경 카운터. ConsoleView가 이 값을 보고 다시 그린다. */
@@ -591,6 +596,17 @@ class AppState {
   toggleCollapsed(groupId: string) {
     this.collapsed[groupId] = !this.collapsed[groupId]
     writeLocal(COLLAPSE_KEY, $state.snapshot(this.collapsed))
+  }
+
+  toggleSidebarPinned() {
+    this.sidebarPinned = !this.sidebarPinned
+    this.sidebarOpen = false
+    writeLocal(PINNED_KEY, this.sidebarPinned)
+  }
+
+  /** 실행 중(시작·대기·중지 중 포함)인 서비스, 트리 순서대로 */
+  get activeServices(): Service[] {
+    return this.workspace.services.filter((s) => isActive(this.statuses[s.id]?.state))
   }
 
   setSidebarWidth(w: number) {
