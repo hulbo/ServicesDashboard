@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { badgeTitle, serviceBadge } from './rail'
+import { badgeTitle, pointInRect, serviceBadge } from './rail'
 
 describe('기둥 아이콘 글자', () => {
   it('한글 이름은 앞 두 글자', () => {
@@ -25,5 +25,21 @@ describe('기둥 아이콘 글자', () => {
   it('설명: 이름 · 상태 · 포트', () => {
     expect(badgeTitle('portal', '실행 중', [5173])).toBe('portal · 실행 중 · :5173')
     expect(badgeTitle('batch', '시작 중', [])).toBe('batch · 시작 중')
+  })
+})
+
+describe('마우스 위치가 목록 안인지', () => {
+  const r = { left: 44, top: 0, right: 344, bottom: 776 }
+  it('안쪽·왼쪽 위 끝은 안', () => {
+    expect(pointInRect({ x: 320, y: 400 }, r)).toBe(true)
+    expect(pointInRect({ x: 44, y: 0 }, r)).toBe(true)
+  })
+  it('바깥·오른쪽 아래 끝은 밖', () => {
+    expect(pointInRect({ x: 43, y: 400 }, r)).toBe(false)
+    expect(pointInRect({ x: 344, y: 400 }, r)).toBe(false)
+    expect(pointInRect({ x: 100, y: 776 }, r)).toBe(false)
+  })
+  it('마우스가 창 밖(null)이면 밖', () => {
+    expect(pointInRect(null, r)).toBe(false)
   })
 })

@@ -16,6 +16,7 @@
   import { applyFonts } from './lib/fonts'
   import Toasts from './lib/components/Toasts.svelte'
   import SidebarRail from './lib/components/SidebarRail.svelte'
+  import { pointInRect } from './lib/rail'
 
   let initError = $state<string | null>(null)
 
@@ -41,13 +42,30 @@
     return !!el && !!sidebarEl?.contains(el) && !!el.closest('input, textarea, select')
   }
 
+  /** 마지막 마우스 위치 (창 밖으로 나가면 null) */
+  let pointer: { x: number; y: number } | null = null
+  function trackPointer(e: PointerEvent) {
+    pointer = { x: e.clientX, y: e.clientY }
+  }
+  function pointerOut(e: MouseEvent) {
+    if (!e.relatedTarget) pointer = null // 창 밖으로 나감
+  }
+
   function scheduleClose() {
     // 기둥 위에 있는 동안은 펼치려던 것을 취소하지 않는다
     if (!overRail) clearTimeout(showTimer)
     clearTimeout(hideTimer)
-    hideTimer = setTimeout(() => {
-      if (!overRail && !overSidebar && !typingInSidebar()) app.sidebarOpen = false
-    }, CLOSE_DELAY)
+    hideTimer = setTimeout(tryClose, CLOSE_DELAY)
+  }
+  function tryClose() {
+    if (app.sidebarPinned || !app.sidebarOpen || overRail || overSidebar || typingInSidebar()) return
+    // 펼쳐지는 동안 목록이 멈춘 커서 아래로 미끄러져 들어오면 브라우저가 mouseenter를 내지 않는다.
+    // 마지막 마우스 위치가 목록 안이면 접지 않고 잠시 뒤 다시 본다 (마우스를 움직이면 mouseenter가 온다).
+    if (sidebarEl && pointInRect(pointer, sidebarEl.getBoundingClientRect())) {
+      hideTimer = setTimeout(tryClose, CLOSE_DELAY)
+      return
+    }
+    app.sidebarOpen = false
   }
 
   function railEnter() {
@@ -147,7 +165,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} oncontextmenu={onContextMenu} />
+<svelte:window onkeydown={onKeydown} oncontextmenu={onContextMenu} onpointermove={trackPointer} onmouseout={pointerOut} />
 
 {#if initError}
   <div class="center">

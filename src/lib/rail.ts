@@ -23,3 +23,11 @@ export function serviceBadge(name: string): string {
 export function badgeTitle(name: string, stateLabel: string, ports: number[]): string {
   return [name, stateLabel, ...ports.slice(0, 3).map((p) => `:${p}`)].join(' · ')
 }
+
+/** 점(마지막 마우스 위치)이 사각형(getBoundingClientRect) 안에 있는지. 오른쪽·아래 끝은 바깥으로 본다. */
+export function pointInRect(
+  p: { x: number; y: number } | null,
+  r: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  return !!p && p.x >= r.left && p.x < r.right && p.y >= r.top && p.y < r.bottom
+}
