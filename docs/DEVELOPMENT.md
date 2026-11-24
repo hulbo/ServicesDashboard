@@ -32,7 +32,10 @@ npm run tauri build   # 설치본 빌드 → src-tauri/target/release/bundle/nsi
 npm run check                                   # Svelte·TypeScript 타입 검사
 npm test                                        # 프론트엔드 단위 테스트 (vitest)
 cargo test --manifest-path src-tauri/Cargo.toml # 백엔드 단위·통합 테스트
+npm run e2e                                     # 실제 앱 E2E (빌드 필요, Windows 로컬 전용)
 ```
+
+실제 앱 E2E는 빌드한 앱을 따로 띄우고, WebView2 원격 디버깅으로 실제 마우스·키 입력을 보냅니다. 단위 테스트가 닿지 않는 hover·끌어서 놓기·단축키·글꼴·앱 안 업데이트를 확인합니다. 설정 폴더를 임시 폴더에 따로 만들기 때문에 평소 쓰는 앱을 켜 둔 채 돌려도 됩니다. 준비할 빌드, 시험 목록, 환경변수는 [e2e/README.md](../e2e/README.md)에 있습니다. 화면 동작을 바꿨다면 관련 시험을 함께 고치세요.
 
 ## 브라우저 미리보기
 
@@ -77,6 +80,7 @@ src-tauri/src/             백엔드 (Rust, Tauri 2)
   update.rs                앱 안 업데이트 (확인·받기·서명 확인·설치)
   importers/               IntelliJ 실행 구성·package.json·Spring Boot 모듈·VS Code·공유 파일
 scripts/latest-json.mjs    릴리스용 latest.json 만들기 (앱 안 업데이트)
+e2e/                       실제 앱 E2E 시험 (lib.mjs 공통 하네스, 기능별 시험, run-all.mjs)
 schema/                    워크스페이스 JSON Schema
 examples/                  워크스페이스 예시
 docs/                      사용 설명서, 개발 가이드, 기획서, 스크린샷
@@ -100,4 +104,4 @@ docs/                      사용 설명서, 개발 가이드, 기획서, 스크
   gh release create v0.1.11 ServicesDashboard_0.1.11_x64-setup.exe latest.json --notes-file release-notes.md
   ```
 
-- **시험**: `SERVICES_DASHBOARD_UPDATE_URL` 환경변수가 있으면 그 주소의 `latest.json`을 읽습니다 (서명 확인은 그대로). 릴리스 빌드는 `https` 주소만 받으므로, 로컬 `http` 서버로 시험할 때는 `npm run tauri build -- --debug --no-bundle`로 만든 디버그 빌드를 씁니다.
+- **시험**: `SERVICES_DASHBOARD_UPDATE_URL` 환경변수가 있으면 그 주소의 `latest.json`을 읽습니다 (서명 확인은 그대로). 릴리스 빌드는 `https` 주소만 받으므로, 로컬 `http` 서버로 시험할 때는 `npm run tauri build -- --debug --no-bundle`로 만든 디버그 빌드를 씁니다. 이 과정은 `npm run e2e -- update`가 그대로 합니다(확인·받기·서명 확인·변조 거부·버전 불일치 거부).

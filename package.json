@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "vitest run",
+    "e2e": "node e2e/run-all.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
