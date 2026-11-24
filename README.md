@@ -41,7 +41,7 @@ Spring Boot(Gradle·Maven), Node(npm·yarn·pnpm), jar, 임의 명령으로 된 
 1. **[최신 릴리스](https://github.com/hulbo/ServicesDashboard/releases/latest)**에서 `ServicesDashboard_<버전>_x64-setup.exe`를 받아 실행합니다.
 2. SmartScreen이 막으면 **추가 정보 → 실행**을 누릅니다 (코드 서명이 없는 설치본입니다).
 
-Windows 10/11 x64에서 동작하며 관리자 권한은 필요 없습니다. 업데이트할 때는 새 설치본을 덮어 설치하면 되고, 설정은 그대로 남습니다.
+Windows 10/11 x64에서 동작하며 관리자 권한은 필요 없습니다. v0.1.11부터는 새 버전이 나오면 앱 아래 상태 표시줄에 **업데이트** 버튼이 나타나고, 누르면 앱 안에서 받아 설치합니다(설정은 그대로 남습니다).
 
 ## 빠르게 시작하기
 

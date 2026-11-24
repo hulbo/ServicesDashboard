@@ -17,6 +17,8 @@ import type {
   ServiceStatus,
   StartError,
   SwitchResult,
+  UpdateInfo,
+  UpdateProgress,
   Workspace,
   WorkspaceInfo,
 } from './types'
@@ -66,6 +68,13 @@ export interface Backend {
   gitFetch(root: string): Promise<void>
   /** 실행 중인 서비스를 멈추고 전환한 뒤(선택하면 pull) 다시 시작한다 */
   gitSwitch(root: string, branch: string, pull: boolean, restart: boolean): Promise<SwitchResult>
+  /** 새 버전이 있으면 그 정보, 최신이면 null */
+  updateCheck(): Promise<UpdateInfo | null>
+  /** 설치본을 받고 서명을 검증한다 */
+  updateDownload(): Promise<void>
+  /** 실행 중인 서비스를 멈추고 설치를 시작한다 (성공하면 앱이 끝나고 다시 켜진다) */
+  updateInstall(): Promise<void>
+  onUpdateProgress(cb: (p: UpdateProgress) => void): Promise<() => void>
 }
 
 export function errorMessage(e: unknown): string {
@@ -143,6 +152,10 @@ async function createTauriBackend(): Promise<Backend> {
     gitBranches: (root) => call('git_branches', { root }),
     gitFetch: (root) => call('git_fetch', { root }),
     gitSwitch: (root, branch, pull, restart) => call('git_switch', { root, branch, pull, restart }),
+    updateCheck: () => call('update_check'),
+    updateDownload: () => call('update_download'),
+    updateInstall: () => call('update_install'),
+    onUpdateProgress: (cb) => listen<UpdateProgress>('update://progress', (e) => cb(e.payload)),
   }
 }
 

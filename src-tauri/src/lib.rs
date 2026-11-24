@@ -13,6 +13,7 @@ mod process;
 mod runtime;
 mod shell;
 mod store;
+mod update;
 mod vars;
 mod watch;
 
@@ -41,6 +42,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(update::UpdateState::default())
         .on_window_event(shell::on_window_event)
         .setup(|app| {
             let store = Store::open(Store::default_base_dir())?;
@@ -126,6 +129,9 @@ pub fn run() {
             commands::git_branches,
             commands::git_fetch,
             commands::git_switch,
+            update::update_check,
+            update::update_download,
+            update::update_install,
         ])
         .build(tauri::generate_context!())
         .expect("Services Dashboard를 시작할 수 없습니다");

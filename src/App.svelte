@@ -17,8 +17,10 @@
   import Toasts from './lib/components/Toasts.svelte'
   import SidebarRail from './lib/components/SidebarRail.svelte'
   import { pointInRect } from './lib/rail'
+  import { statusbarLabel } from './lib/update'
 
   let initError = $state<string | null>(null)
+  const updateLabel = $derived(statusbarLabel(app.update))
 
   // 설정의 글꼴(미리보기 포함)을 문서 전체에 적용
   $effect(() => applyFonts(app.fonts))
@@ -268,6 +270,17 @@
       {#if app.backend.isMock}
         <span class="badge" title="일반 브라우저에서 열어 가짜 백엔드로 동작 중입니다. 실제 프로세스는 실행되지 않습니다.">브라우저 미리보기</span>
       {/if}
+      {#if updateLabel}
+        <button
+          class="update"
+          disabled={app.update.phase !== 'available'}
+          title={app.update.phase === 'available' ? '새 버전을 받아 설치합니다 (앱이 잠시 꺼졌다가 다시 켜집니다)' : undefined}
+          onclick={() => app.installUpdate()}
+        >
+          <Icon name="update" size={12} />
+          {updateLabel}
+        </button>
+      {/if}
       {#if app.info}<span class="ver">v{app.info.version}</span>{/if}
     </footer>
   </div>
@@ -394,6 +407,28 @@
   }
   .ver {
     color: var(--faint);
+  }
+  .update {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 18px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .update:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+  .update:disabled {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--text);
+    cursor: default;
   }
   .center {
     display: flex;

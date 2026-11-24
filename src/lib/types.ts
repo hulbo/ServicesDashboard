@@ -180,6 +180,22 @@ export interface AppSettings {
   /** 직접 시작·재시작할 때 이전 실행의 콘솔 로그를 지운다 */
   clearConsoleOnStart: boolean
   fonts: FontSettings
+  /** 앱을 켤 때(그리고 몇 시간마다) 새 버전이 있는지 확인 */
+  autoUpdateCheck: boolean
+}
+
+/** 새 버전 정보 */
+export interface UpdateInfo {
+  version: string
+  currentVersion: string
+  /** 릴리스 노트 */
+  notes: string | null
+}
+
+/** 업데이트 받는 중 진행률 (바이트) */
+export interface UpdateProgress {
+  downloaded: number
+  total: number | null
 }
 
 /** 화면·콘솔 글꼴. 이름이 비어 있으면 기본 글꼴 */

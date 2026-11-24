@@ -567,15 +567,16 @@ pub async fn group_stop(core: Core<'_>, id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn stop_all(core: Core<'_>) -> Result<(), String> {
     let core = core.inner().clone();
-    blocking(move || {
-        // 실행 중인 것과 대기 중인 것 모두
-        let mut ids = core.manager.running_ids();
-        if let Ok(ws) = core.current() {
-            ids.extend(ws.services.iter().map(|s| s.id.clone()).filter(|id| core.manager.is_waiting(id) || core.manager.is_preparing(id)));
-        }
-        core.manager.stop_many(&ids)
-    })
-    .await
+    blocking(move || stop_everything(&core)).await
+}
+
+/// 실행 중인 것과 대기·준비 중인 것을 모두 멈추고, 끝날 때까지 기다린다.
+pub(crate) fn stop_everything(core: &AppCore) -> Result<(), String> {
+    let mut ids = core.manager.running_ids();
+    if let Ok(ws) = core.current() {
+        ids.extend(ws.services.iter().map(|s| s.id.clone()).filter(|id| core.manager.is_waiting(id) || core.manager.is_preparing(id)));
+    }
+    core.manager.stop_many(&ids)
 }
 
 #[tauri::command]

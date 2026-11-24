@@ -30,6 +30,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "shortDescription": "로컬 개발 서비스 대시보드",
     "longDescription": "IntelliJ 없이 Node, Spring Boot, Maven, Gradle 서비스를 한 화면에서 실행하고 로그를 확인하는 가벼운 대시보드",
     "icon": [
@@ -43,6 +44,16 @@
       "nsis": {
         "languages": ["Korean", "English"],
         "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2QjQzQzA3QUEwREVCOUYKUldTZjZ3MnFCenkwcHNXSEhpNTlqTmNXSloyNXhWbWxnQ1ZGSmVMcktZVmVDMkpXQ0txQUduMlUK",
+      "endpoints": ["https://github.com/hulbo/ServicesDashboard/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

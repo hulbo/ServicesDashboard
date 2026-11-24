@@ -3,7 +3,7 @@
 
 import type { Backend } from './api'
 import { joinArgs } from './args'
-import type { AppSettings, Candidate, LogBatch, LogLine, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
+import type { AppSettings, Candidate, LogBatch, LogLine, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, UpdateProgress, Workspace } from './types'
 import { STREAM_ERR, STREAM_OUT, STREAM_SYS, isActive } from './types'
 
 const sample: Workspace = {
@@ -195,7 +195,9 @@ export function createMockBackend(): Backend {
     logFiles: { enabled: false, retentionDays: 7 },
     clearConsoleOnStart: true,
     fonts: { ui: '', mono: '', consoleSize: 12.5 },
+    autoUpdateCheck: true,
   }
+  const progressListeners = new Set<(p: UpdateProgress) => void>()
   /** 직접 시작할 때 이전 로그 지우기 (실제 백엔드의 reset 묶음과 같게) */
   const resetLogs = (id: string) => {
     if (!settings.clearConsoleOnStart) return
@@ -504,6 +506,26 @@ export function createMockBackend(): Backend {
       gitHead = local
       if (restart) for (const id of ids) void launch(id)
       return { branch: local, stopped: ids, restarted: restart && ids.length > 0, warnings: [] }
+    },
+    // 미리보기: 늘 새 버전이 있는 것처럼 보이고, 받기는 흉내만 내고, 설치는 하지 않는다
+    updateCheck: async () => {
+      await new Promise((r) => setTimeout(r, 500))
+      return { version: '0.2.0', currentVersion: '0.1.10', notes: '미리보기용 가짜 업데이트입니다.' }
+    },
+    updateDownload: async () => {
+      const total = 2_700_000
+      for (let done = 0; done < total; done += 270_000) {
+        for (const cb of progressListeners) cb({ downloaded: done, total })
+        await new Promise((r) => setTimeout(r, 120))
+      }
+      for (const cb of progressListeners) cb({ downloaded: total, total })
+    },
+    updateInstall: async () => {
+      throw new Error('브라우저 미리보기에서는 설치하지 않습니다.')
+    },
+    onUpdateProgress: async (cb) => {
+      progressListeners.add(cb)
+      return () => progressListeners.delete(cb)
     },
   }
 }

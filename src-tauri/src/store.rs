@@ -35,6 +35,9 @@ pub struct Settings {
     pub clear_console_on_start: bool,
     #[serde(default)]
     pub fonts: FontSettings,
+    /// 앱을 켤 때(그리고 몇 시간마다) 새 버전이 있는지 확인한다
+    #[serde(default = "yes")]
+    pub auto_update_check: bool,
 }
 
 /// 화면·콘솔 글꼴. 이름이 비어 있으면 기본 글꼴을 쓴다.
@@ -114,6 +117,7 @@ impl Default for Settings {
             log_files: LogFileSettings::default(),
             clear_console_on_start: true,
             fonts: FontSettings::default(),
+            auto_update_check: true,
         }
     }
 }

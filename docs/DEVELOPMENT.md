@@ -56,6 +56,7 @@ src/                       화면 (Svelte 5 + TypeScript)
   lib/git.ts               브랜치 표시·밖에서 바꾼 브랜치 감지
   lib/reorder.ts           목록 순서 바꾸기·이름순 정렬
   lib/fonts.ts             글꼴 설정 적용(CSS 변수)·콘솔 줄 높이
+  lib/update.ts            앱 업데이트 상태 표시·묻는 말
   lib/components/          ServiceTree, ConsoleView, ServiceForm, ImportPanel, BranchPanel, ...
 src-tauri/src/             백엔드 (Rust, Tauri 2)
   model.rs                 워크스페이스 JSON 모델
@@ -73,7 +74,9 @@ src-tauri/src/             백엔드 (Rust, Tauri 2)
   git.rs                   git 저장소 찾기·현재 브랜치·브랜치 목록·전환·fetch·pull
   shell.rs                 트레이·창 닫기·알림
   fonts.rs                 설치된 글꼴 목록 (DirectWrite)
+  update.rs                앱 안 업데이트 (확인·받기·서명 확인·설치)
   importers/               IntelliJ 실행 구성·package.json·Spring Boot 모듈·VS Code·공유 파일
+scripts/latest-json.mjs    릴리스용 latest.json 만들기 (앱 안 업데이트)
 schema/                    워크스페이스 JSON Schema
 examples/                  워크스페이스 예시
 docs/                      사용 설명서, 개발 가이드, 기획서, 스크린샷
@@ -83,3 +86,18 @@ docs/                      사용 설명서, 개발 가이드, 기획서, 스크
 
 - `main`에 push하면 GitHub Actions가 검사·테스트를 돌리고 설치본을 빌드합니다. 결과물은 실행 기록의 `services-dashboard-windows` 아티팩트로 받을 수 있습니다.
 - 릴리스는 버전(`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`)을 올려 push한 뒤, 그 빌드의 설치본을 `v<버전>` 태그의 GitHub Release로 올립니다.
+
+### 앱 안 업데이트
+
+앱은 `https://github.com/hulbo/ServicesDashboard/releases/latest/download/latest.json`을 읽어 새 버전을 찾고, 받은 설치본의 서명을 `tauri.conf.json`의 `plugins.updater.pubkey`로 확인한 뒤 설치합니다 (`src-tauri/src/update.rs`, `tauri-plugin-updater`).
+
+- **서명 키**: 비밀 키는 저장소 Secret `TAURI_SIGNING_PRIVATE_KEY`와 관리자 PC(저장소 밖)에만 있습니다. 비밀번호는 없습니다. 키를 잃어버리면 이미 설치된 앱에 업데이트를 보낼 수 없으므로(새 키로 만든 버전을 한 번 직접 설치해야 함) 따로 백업해 둡니다.
+- **CI**: Secret이 있으면 설치본과 함께 서명 파일(`*-setup.exe.sig`)을 만들어 아티팩트에 넣습니다. Secret을 읽을 수 없는 빌드(다른 저장소에서 온 PR)는 서명 없이 빌드합니다.
+- **릴리스할 때**: 아티팩트의 설치본을 `ServicesDashboard_<버전>_x64-setup.exe`로 올리고, 서명 파일로 `latest.json`을 만들어 함께 올립니다. 최신 릴리스에 `latest.json`이 없으면 앱이 새 버전을 찾지 못합니다.
+
+  ```powershell
+  node scripts/latest-json.mjs 0.1.11 "Services Dashboard_0.1.11_x64-setup.exe.sig" notes.txt latest.json
+  gh release create v0.1.11 ServicesDashboard_0.1.11_x64-setup.exe latest.json --notes-file release-notes.md
+  ```
+
+- **시험**: `SERVICES_DASHBOARD_UPDATE_URL` 환경변수가 있으면 그 주소의 `latest.json`을 읽습니다 (서명 확인은 그대로). 릴리스 빌드는 `https` 주소만 받으므로, 로컬 `http` 서버로 시험할 때는 `npm run tauri build -- --debug --no-bundle`로 만든 디버그 빌드를 씁니다.

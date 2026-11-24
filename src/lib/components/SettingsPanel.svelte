@@ -3,6 +3,7 @@
   import { CONSOLE_SIZES, DEFAULT_FONTS, cssFamily, fontLabel, fontsOf } from '../fonts'
   import { app } from '../state.svelte'
   import type { AppSettings, FontSettings } from '../types'
+  import { progressPercent, releaseUrl } from '../update'
   import Icon from './Icon.svelte'
 
   const cloneSettings = (s: AppSettings | null): AppSettings | null => {
@@ -42,6 +43,27 @@
     if (await app.saveSettings(next)) app.toast('success', '설정을 저장했습니다.')
   }
 
+  const upd = $derived(app.update)
+  const updBusy = $derived(upd.phase === 'checking' || upd.phase === 'downloading' || upd.phase === 'installing')
+  const updStatus = $derived.by(() => {
+    switch (upd.phase) {
+      case 'checking':
+        return '확인 중…'
+      case 'latest':
+        return '최신 버전입니다.'
+      case 'downloading': {
+        const pct = progressPercent(upd.progress)
+        return pct === null ? '받는 중…' : `받는 중 ${pct}%`
+      }
+      case 'installing':
+        return '설치 준비 중…'
+      case 'error':
+        return upd.error || '업데이트를 확인하지 못했습니다.'
+      default:
+        return ''
+    }
+  })
+
   async function openLogs() {
     if (!app.info) return
     await app.backend.openPath(`${app.info.configDir}\\logs`).catch(() => app.backend.openPath(app.info!.configDir))
@@ -59,6 +81,34 @@
 
   {#if draft}
     <div class="scroll">
+      <section class="update">
+        <h3>업데이트</h3>
+        <div class="row">
+          <span>현재 버전 <b>v{app.info?.version ?? '?'}</b></span>
+          <button class="btn" disabled={updBusy} onclick={() => app.checkUpdate(true)}><Icon name="refresh" size={14} /> 지금 확인</button>
+          {#if updStatus}<span class="upd-status" class:err={upd.phase === 'error'}>{updStatus}</span>{/if}
+        </div>
+        {#if upd.phase === 'available' && upd.info}
+          {@const info = upd.info}
+          <div class="upd-new">
+            <div><b>v{info.version}</b>이 나왔습니다.</div>
+            {#if info.notes}<pre class="notes">{info.notes}</pre>{/if}
+            <div class="row">
+              <button class="btn primary" onclick={() => app.installUpdate()}><Icon name="update" size={14} /> 지금 업데이트</button>
+              <button class="btn" onclick={() => app.backend.openUrl(releaseUrl(info.version))}>릴리스 페이지</button>
+            </div>
+          </div>
+        {/if}
+        <label class="check auto">
+          <input type="checkbox" bind:checked={draft.autoUpdateCheck} />
+          앱을 켤 때 새 버전 확인
+        </label>
+        <p class="hint">
+          새 버전이 있으면 아래 상태 표시줄에 <b>업데이트</b> 버튼이 나타납니다. 누르면 설치본을 받아 서명을 확인한 뒤 설치하고, 앱이 잠시
+          꺼졌다가 새 버전으로 다시 켜집니다. 실행 중인 서비스는 먼저 중지합니다.
+        </p>
+      </section>
+
       <section>
         <h3>창</h3>
         <label class="check">
@@ -232,6 +282,34 @@
   }
   .row input:disabled {
     opacity: 0.5;
+  }
+  .upd-status {
+    color: var(--muted);
+  }
+  .upd-status.err {
+    color: var(--err);
+  }
+  .upd-new {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .upd-new .row {
+    margin-top: 8px;
+  }
+  .notes {
+    max-height: 9em;
+    margin: 6px 0 0;
+    overflow: auto;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+  .check.auto {
+    margin-top: 12px;
   }
   .font-row {
     display: flex;

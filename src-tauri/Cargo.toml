@@ -31,6 +31,7 @@ regex = { version = "1.13.2", default-features = false, features = ["perf", "std
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 tauri-plugin-notification = "2.8.1"
 tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-updater = "2.14.1"
 
 [profile.release]
 codegen-units = 1

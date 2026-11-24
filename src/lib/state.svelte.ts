@@ -8,6 +8,7 @@ import { applyImport, type ImportItem, type PresetItem } from './importing'
 import { LogStore } from './logstore'
 import type { AppInfo, AppSettings, FontFamily, FontSettings, GitRepo, Group, LogBatch, PortOwner, Preset, RuntimeInfo, ScanResult, Service, ServiceStatus, StartError, Workspace } from './types'
 import { isActive } from './types'
+import { UPDATE_CHECK_INTERVAL_MS, UPDATE_FIRST_CHECK_MS, installQuestion, type UpdateStatus } from './update'
 
 export type Selection = { kind: 'service' | 'group' | 'preset'; id: string } | { kind: 'workspace' | 'import' | 'runtimes' | 'settings' | 'branches' }
 
@@ -93,6 +94,8 @@ class AppState {
   branchFocus = $state<string | null>(null)
   /** 이 앱이 브랜치를 바꾸는 중인 저장소 */
   switching = $state<Record<string, boolean>>({})
+  /** 앱 업데이트: 확인·받기·설치 진행 상태 */
+  update = $state<UpdateStatus>({ phase: 'idle' })
 
   /** 저장소별 마지막으로 본 HEAD (밖에서 바꾼 브랜치 감지용) */
   private heads = new Map<string, string>()
@@ -146,6 +149,56 @@ class AppState {
       this.settings = await this.backend.settingsGet()
     } catch (e) {
       this.toast('error', `설정을 읽지 못했습니다: ${errorMessage(e)}`)
+    }
+    // 새 버전 확인 (미리보기는 설정 화면에서 직접 확인할 때만)
+    if (!this.backend.isMock) {
+      setTimeout(() => this.autoCheckUpdate(), UPDATE_FIRST_CHECK_MS)
+      setInterval(() => this.autoCheckUpdate(), UPDATE_CHECK_INTERVAL_MS)
+    }
+  }
+
+  private autoCheckUpdate() {
+    if (this.settings?.autoUpdateCheck !== false) void this.checkUpdate(false)
+  }
+
+  /** 새 버전이 있는지 확인한다. 직접 누른 확인이면 실패를 알리고, 자동 확인은 조용히 넘어간다. */
+  async checkUpdate(manual: boolean) {
+    const prev = this.update
+    if (prev.phase === 'checking' || prev.phase === 'downloading' || prev.phase === 'installing') return
+    this.update = { phase: 'checking', info: prev.info }
+    try {
+      const info = await this.backend.updateCheck()
+      this.update = info ? { phase: 'available', info } : { phase: 'latest' }
+    } catch (e) {
+      const error = errorMessage(e)
+      if (manual) {
+        this.update = { phase: 'error', error }
+        this.toast('error', error)
+      } else {
+        // 자동 확인 실패(오프라인 등)는 알리지 않고, 이미 찾아 둔 새 버전이 있으면 그대로 둔다
+        this.update = prev.phase === 'available' ? prev : { phase: 'error', error }
+      }
+    }
+  }
+
+  /** 새 버전을 받아 설치한다. 실행 중인 서비스는 멈추고, 앱은 꺼졌다가 새 버전으로 다시 켜진다. */
+  async installUpdate() {
+    const info = this.update.info
+    if (!info || this.update.phase === 'checking' || this.update.phase === 'downloading' || this.update.phase === 'installing') return
+    if (!(await this.backend.confirm(installQuestion(info.version, this.runningCount), '업데이트'))) return
+    const off = await this.backend.onUpdateProgress((progress) => {
+      if (this.update.phase === 'downloading') this.update = { ...this.update, progress }
+    })
+    try {
+      this.update = { phase: 'downloading', info, progress: { downloaded: 0, total: null } }
+      await this.backend.updateDownload()
+      this.update = { phase: 'installing', info }
+      await this.backend.updateInstall() // 성공하면 여기서 앱이 끝난다
+    } catch (e) {
+      this.update = { phase: 'available', info, error: errorMessage(e) }
+      this.toast('error', errorMessage(e))
+    } finally {
+      off()
     }
   }
 

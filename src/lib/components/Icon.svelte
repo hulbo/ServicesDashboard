@@ -34,6 +34,7 @@
     | 'pin'
     | 'sidebar-hide'
     | 'list'
+    | 'update'
 </script>
 
 <script lang="ts">
@@ -137,6 +138,9 @@
     <path d="M6 3v10M11 6.5L9.5 8l1.5 1.5" />
   {:else if name === 'list'}
     <path d="M3 4.5h10M3 8h10M3 11.5h10" />
+  {:else if name === 'update'}
+    <circle cx="8" cy="8" r="6" />
+    <path d="M8 11V5M5.5 7.5L8 5l2.5 2.5" />
   {:else if name === 'more'}
     <g fill="currentColor" stroke="none"><circle cx="3.5" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="12.5" cy="8" r="1.3" /></g>
   {:else if name === 'grip'}
