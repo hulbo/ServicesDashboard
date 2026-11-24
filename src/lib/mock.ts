@@ -380,7 +380,7 @@ export function createMockBackend(): Backend {
   return {
     isMock: true,
     appInfo: async () => ({
-      version: '0.1.10 (미리보기)',
+      version: '0.1.11 (미리보기)',
       configDir: 'C:/Users/me/AppData/Roaming/ServicesDashboard',
       workspacePath: 'C:/Users/me/AppData/Roaming/ServicesDashboard/workspaces/default.json',
     }),
@@ -510,7 +510,7 @@ export function createMockBackend(): Backend {
     // 미리보기: 늘 새 버전이 있는 것처럼 보이고, 받기는 흉내만 내고, 설치는 하지 않는다
     updateCheck: async () => {
       await new Promise((r) => setTimeout(r, 500))
-      return { version: '0.2.0', currentVersion: '0.1.10', notes: '미리보기용 가짜 업데이트입니다.' }
+      return { version: '0.2.0', currentVersion: '0.1.11', notes: '미리보기용 가짜 업데이트입니다.' }
     },
     updateDownload: async () => {
       const total = 2_700_000
