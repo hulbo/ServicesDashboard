@@ -79,6 +79,7 @@ src-tauri/src/             백엔드 (Rust, Tauri 2)
   fonts.rs                 설치된 글꼴 목록 (DirectWrite)
   update.rs                앱 안 업데이트 (확인·받기·서명 확인·설치)
   importers/               IntelliJ 실행 구성·package.json·Spring Boot 모듈·VS Code·공유 파일
+src-tauri/windows/hooks.nsh  설치 프로그램 후크 (바탕화면 바로가기)
 scripts/latest-json.mjs    릴리스용 latest.json 만들기 (앱 안 업데이트)
 e2e/                       실제 앱 E2E 시험 (lib.mjs 공통 하네스, 기능별 시험, run-all.mjs)
 schema/                    워크스페이스 JSON Schema
@@ -90,6 +91,7 @@ docs/                      사용 설명서, 개발 가이드, 기획서, 스크
 
 - `main`에 push하면 GitHub Actions가 검사·테스트를 돌리고 설치본을 빌드합니다. 결과물은 실행 기록의 `services-dashboard-windows` 아티팩트로 받을 수 있습니다.
 - 릴리스는 버전(`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`)을 올려 push한 뒤, 그 빌드의 설치본을 `v<버전>` 태그의 GitHub Release로 올립니다.
+- 설치 프로그램은 Tauri 기본 NSIS에 `src-tauri/windows/hooks.nsh` 후크를 더합니다. 설치하자마자 바탕화면 바로가기를 만듭니다. 앱 안 업데이트(`/UPDATE`)에서는 한 번도 만든 적이 없을 때만 만들고, 만든 적이 있는지는 레지스트리 `HKCU\Software\hulbo\Services Dashboard`의 `DesktopShortcut` 값으로 압니다. 후크를 고쳤다면 `productName`과 `identifier`를 바꾼 시험용 설치본으로 설치·업데이트·제거를 해 보세요. 예를 들면 `npm run tauri build -- --config '{"productName":"SD Test","identifier":"com.example.sdtest","bundle":{"createUpdaterArtifacts":false}}'`입니다. 이렇게 하면 쓰고 있는 설치본과 설치 폴더·레지스트리가 겹치지 않습니다.
 
 ### 앱 안 업데이트
 

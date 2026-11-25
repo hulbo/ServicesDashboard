@@ -32,6 +32,7 @@ Services Dashboard로 서비스를 등록하고, 실행하고, 로그를 보는 
 
 1. [Releases](https://github.com/hulbo/ServicesDashboard/releases/latest)에서 `ServicesDashboard_<버전>_x64-setup.exe`를 받아 실행합니다.
 2. 코드 서명이 없는 설치본이라 SmartScreen이 막으면 **추가 정보 → 실행**을 누릅니다.
+3. 설치가 끝나면 시작 메뉴와 바탕화면에 **Services Dashboard** 바로가기가 생깁니다(v0.1.12부터는 바탕화면 바로가기를 늘 만듭니다). 앱 안 업데이트는 바탕화면 바로가기를 한 번만 만들고, 지운 바로가기를 업데이트할 때마다 되살리지는 않습니다.
 
 **업데이트** (v0.1.11부터)
 
